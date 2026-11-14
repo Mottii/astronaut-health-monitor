@@ -10,6 +10,12 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { BODY_SYSTEM_METADATA } from "@/data/nasaHrpData";
+import {
+  buildShellEnvelope,
+  containGeometryInsideShell,
+  containGroupInsideShell,
+  type ShellEnvelope,
+} from "@/lib/shellContainment";
 import type {
   BodySystemId,
   CascadeLink,
@@ -1068,6 +1074,8 @@ export function BioTwin3DStage({
     let disposed = false;
     let skeletalFrameMesh: THREE.Mesh | null = null;
     let armBonesLoaded = false;
+    let shellEnvelope: ShellEnvelope | null = null;
+    const pendingArmBoneGroups: THREE.Group[] = [];
 
     const stripProceduralArmTubes = (geometry: THREE.BufferGeometry) => {
       const pos = geometry.getAttribute("position");
@@ -1198,13 +1206,32 @@ export function BioTwin3DStage({
           }
         });
 
+        // Build Outer_Body_Shell spatial envelope first so every bone and organ is clamped strictly inside the skin silhouette
+        const shellObj = meshesToProcess.find((m) => m.name === "Outer_Body_Shell");
+        if (shellObj) {
+          shellObj.geometry.applyMatrix4(shellObj.matrixWorld);
+          shellObj.position.set(0, 0, 0);
+          shellObj.rotation.set(0, 0, 0);
+          shellObj.scale.set(1, 1, 1);
+          shellObj.updateMatrix();
+          shellEnvelope = buildShellEnvelope(shellObj.geometry);
+          if (shellEnvelope && pendingArmBoneGroups.length > 0) {
+            for (const grp of pendingArmBoneGroups) {
+              containGroupInsideShell(grp, shellEnvelope, 0.008);
+            }
+            pendingArmBoneGroups.length = 0;
+          }
+        }
+
         for (const obj of meshesToProcess) {
-          // Bake glTF hierarchy transform into geometry so world positions match ORGAN_ANCHORS
-          obj.geometry.applyMatrix4(obj.matrixWorld);
-          obj.position.set(0, 0, 0);
-          obj.rotation.set(0, 0, 0);
-          obj.scale.set(1, 1, 1);
-          obj.updateMatrix();
+          if (obj !== shellObj) {
+            // Bake glTF hierarchy transform into geometry so world positions match ORGAN_ANCHORS
+            obj.geometry.applyMatrix4(obj.matrixWorld);
+            obj.position.set(0, 0, 0);
+            obj.rotation.set(0, 0, 0);
+            obj.scale.set(1, 1, 1);
+            obj.updateMatrix();
+          }
 
           if (obj.name === "Outer_Body_Shell") {
             obj.material = shellMaterial;
@@ -1254,6 +1281,9 @@ export function BioTwin3DStage({
             if (armBonesLoaded) {
               stripProceduralArmTubes(obj.geometry);
             }
+            if (shellEnvelope) {
+              containGeometryInsideShell(obj.geometry, shellEnvelope, 0.011);
+            }
             scene.add(obj);
             continue;
           }
@@ -1264,12 +1294,20 @@ export function BioTwin3DStage({
           const sysId = parsed.systemId;
           if (parsed.tissueTag === "Bone") {
             // Unify pelvis, femurs, and knees with Skeletal_Frame X-ray Fresnel shader
+            if (shellEnvelope) {
+              containGeometryInsideShell(obj.geometry, shellEnvelope, 0.011);
+            }
             obj.material = skeletonMaterial;
             obj.userData = { systemId: sysId, parsed };
             obj.renderOrder = 2;
             scene.add(obj);
             organPickTargets.push(obj);
             continue;
+          }
+
+          // Ensure soft organs and vasculature sit safely inside Outer_Body_Shell even during breathing/cardiac pulse
+          if (shellEnvelope) {
+            containGeometryInsideShell(obj.geometry, shellEnvelope, 0.010);
           }
 
           const isShell = parsed.layer === "Shell";
@@ -1409,6 +1447,11 @@ export function BioTwin3DStage({
             spec.proximalMode ?? "maxY"
           );
           if (seg) {
+            if (shellEnvelope) {
+              containGroupInsideShell(seg, shellEnvelope, 0.008);
+            } else {
+              pendingArmBoneGroups.push(seg);
+            }
             scene.add(seg);
             addedCount++;
           }
