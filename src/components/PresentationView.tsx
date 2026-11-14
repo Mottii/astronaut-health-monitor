@@ -265,48 +265,11 @@ export function PresentationView({
         </div>
       </header>
 
-      {/* Left Vertical Chapter Rail (Hubtown Style, 28px margin) */}
-      <nav
-        aria-label="Presentation Chapters"
-        className="pointer-events-auto absolute top-1/2 left-5 z-30 hidden -translate-y-1/2 flex-col gap-3 sm:left-7 md:flex"
-      >
-        {PRESENTATION_SLIDES.map((item, idx) => {
-          const isActive = idx === slideIndex;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => goToSlide(idx)}
-              onMouseEnter={() => soundEngine.playHoverTick()}
-              aria-current={isActive ? "step" : undefined}
-              className="group flex cursor-pointer items-center gap-3 text-left transition"
-            >
-              <span
-                className={`h-1.5 w-1.5 rounded-full transition-all ${
-                  isActive
-                    ? "scale-125 bg-sky-400 shadow-[0_0_10px_#38bdf8]"
-                    : "bg-white/20 group-hover:bg-white/55"
-                }`}
-              />
-              <span
-                className={`font-mono text-[10px] tracking-[0.2em] transition-colors ${
-                  isActive
-                    ? "font-semibold text-white"
-                    : "text-white/35 group-hover:text-white/75"
-                }`}
-              >
-                {item.chapterCode} · {item.chapterLabel}
-              </span>
-            </button>
-          );
-        })}
-      </nav>
-
-      {/* Right Compact HUD: Earth vs. Spaceflight Metrics (hidden on Slide 01 cover, clean glass cards on 02-06) */}
+      {/* Left Compact HUD: Earth vs. Spaceflight Metrics (hidden on Slide 01 cover, clean glass cards on 02-06) */}
       {slideIndex > 0 && (
         <aside
           aria-label="Slide Telemetry Comparison"
-          className="pointer-events-auto absolute top-1/2 right-5 z-30 hidden w-[268px] -translate-y-1/2 flex-col gap-2.5 sm:right-7 lg:flex"
+          className="pointer-events-auto absolute top-1/2 left-5 z-30 hidden w-[268px] -translate-y-1/2 flex-col gap-2.5 sm:left-7 lg:flex"
         >
           <div className="flex items-center justify-between font-mono text-[9.5px] tracking-[0.18em] text-white/45">
             <span>EARTH VS SPACE</span>
@@ -379,6 +342,43 @@ export function PresentationView({
           )}
         </aside>
       )}
+
+      {/* Right Vertical Chapter Rail (Hubtown Style, 28px margin, right-aligned) */}
+      <nav
+        aria-label="Presentation Chapters"
+        className="pointer-events-auto absolute top-1/2 right-5 z-30 hidden -translate-y-1/2 flex-col items-end gap-3 sm:right-7 md:flex"
+      >
+        {PRESENTATION_SLIDES.map((item, idx) => {
+          const isActive = idx === slideIndex;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => goToSlide(idx)}
+              onMouseEnter={() => soundEngine.playHoverTick()}
+              aria-current={isActive ? "step" : undefined}
+              className="group flex cursor-pointer items-center justify-end gap-3 text-right transition"
+            >
+              <span
+                className={`font-mono text-[10px] tracking-[0.2em] transition-colors ${
+                  isActive
+                    ? "font-semibold text-white"
+                    : "text-white/35 group-hover:text-white/75"
+                }`}
+              >
+                {item.chapterCode} · {item.chapterLabel}
+              </span>
+              <span
+                className={`h-1.5 w-1.5 rounded-full transition-all ${
+                  isActive
+                    ? "scale-125 bg-sky-400 shadow-[0_0_10px_#38bdf8]"
+                    : "bg-white/20 group-hover:bg-white/55"
+                }`}
+              />
+            </button>
+          );
+        })}
+      </nav>
 
       {/* Bottom Center Slide Headline & CTA (Hubtown Hero Placement) */}
       <section className="pointer-events-none absolute inset-x-0 bottom-14 z-30 mx-auto flex max-w-2xl flex-col items-center px-5 text-center sm:bottom-12">

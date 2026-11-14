@@ -807,9 +807,9 @@ export default function HomePage() {
     activeCrewProfile.callsign;
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#09090b] text-white lg:h-dvh lg:overflow-hidden">
-      {/* ZONE A: Compact Monochrome Top Command Bar */}
-      <header className="shrink-0 border-b border-white/[0.06] bg-[#0d0d0f] px-3 py-1.5 lg:px-4">
+    <div className="flex min-h-screen flex-col bg-[#06070a] text-white lg:h-dvh lg:overflow-hidden">
+      {/* ZONE A: Deep-Space Glassmorphic Top Command Bar */}
+      <header className="shrink-0 border-b border-white/[0.08] bg-[#070b14]/90 px-3 py-1.5 backdrop-blur-md lg:px-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           {/* Left: Brand Identity + Environment + Crew Menu + Pre-Flight Lab */}
           <div className="flex flex-wrap items-center gap-1.5">
@@ -1183,7 +1183,7 @@ export default function HomePage() {
       {/* ZONE C: Persistent 6-Channel Bottom Telemetry Dock */}
       <footer
         aria-label="Live physiological and environmental telemetry strip"
-        className="shrink-0 border-t border-white/[0.06] bg-[#0d0d0f] px-3 py-1.5 lg:px-4"
+        className="shrink-0 border-t border-white/[0.08] bg-[#070b14]/90 px-3 py-1.5 backdrop-blur-md lg:px-4"
       >
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           {telemetryStripChannels.map((ch) => {
@@ -1207,10 +1207,10 @@ export default function HomePage() {
                     handleSelectSystem(ch.focusSystem);
                   }
                 }}
-                className={`flex min-w-0 cursor-pointer flex-col justify-between rounded-xl border px-2.5 py-1.5 transition ${
+                className={`flex min-w-0 cursor-pointer flex-col justify-between rounded-xl border px-2.5 py-1.5 backdrop-blur-md transition ${
                   isSelected
-                    ? "border-white/20 bg-[#1a1a1d]"
-                    : "border-white/[0.06] bg-[#121214] hover:border-white/15"
+                    ? "border-sky-400/35 bg-[#0c1424]/85"
+                    : "border-white/[0.08] bg-[#0a0f1a]/65 hover:border-white/20"
                 }`}
               >
                 <div className="flex items-center justify-between gap-1.5">
