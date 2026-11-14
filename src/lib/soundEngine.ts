@@ -4,6 +4,12 @@
  * without external audio asset downloads.
  */
 
+const BG_PLAYLIST = [
+  "/audio/dark-soul.m4a",
+  "/audio/cyberpunk.m4a",
+  "/audio/humanity.m4a",
+];
+
 class AresSoundEngine {
   private ctx: AudioContext | null = null;
   private enabled = false;
@@ -11,6 +17,7 @@ class AresSoundEngine {
   private ambientOscA: OscillatorNode | null = null;
   private ambientOscB: OscillatorNode | null = null;
   private bgAudio: HTMLAudioElement | null = null;
+  private bgTrackIndex = 0;
   private bgFadeTimer: number | null = null;
   private bgUnavailable = false;
 
@@ -54,10 +61,16 @@ class AresSoundEngine {
     }
 
     if (!this.bgAudio) {
-      const audio = new Audio("/audio/bg-music.mp3");
-      audio.loop = true;
+      const audio = new Audio(BG_PLAYLIST[this.bgTrackIndex]);
       audio.preload = "auto";
       audio.volume = 0;
+      audio.addEventListener("ended", () => {
+        this.bgTrackIndex = (this.bgTrackIndex + 1) % BG_PLAYLIST.length;
+        audio.src = BG_PLAYLIST[this.bgTrackIndex];
+        if (this.enabled) {
+          void audio.play().catch(() => {});
+        }
+      });
       audio.addEventListener("error", () => {
         this.bgUnavailable = true;
         this.bgAudio = null;

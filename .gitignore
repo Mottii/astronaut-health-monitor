@@ -26,3 +26,4 @@ yarn-error.log*
 # Local reference PDFs & raw intermediate 3D downloads
 NASA Space Apps Challenge.pdf
 scripts/raw_organs/
+public/audio/

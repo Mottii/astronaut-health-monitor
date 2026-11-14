@@ -89,35 +89,35 @@ const SYSTEM_KEY_MAP: Record<string, BodySystemId> = {
 };
 
 const SYSTEM_BASE_HEX: Record<BodySystemId, string> = {
-  neuro_ocular: "#2dd4bf",
-  behavioral_circadian: "#818cf8",
-  cardiovascular: "#fb7185",
-  immune_hematology: "#c084fc",
-  metabolic_endocrine: "#f97316",
-  musculoskeletal_renal: "#4ade80",
+  neuro_ocular: "#4e9e9a",
+  behavioral_circadian: "#747eb8",
+  cardiovascular: "#a85c6b",
+  immune_hematology: "#8a70ad",
+  metabolic_endocrine: "#a6754e",
+  musculoskeletal_renal: "#579977",
 };
 
 const TISSUE_COLOR_HEX: Record<string, string> = {
-  Myocardium: "#e11d48",
-  Valve: "#f8fafc",
-  Artery: "#ef4444",
-  Vein: "#3b82f6",
-  Parenchyma: "#c084fc",
-  Airway: "#e2e8f0",
-  Lymphoid: "#a855f7",
-  Cortex: "#38bdf8",
-  Ventricle: "#22d3ee",
-  Neural: "#60a5fa",
-  Ocular: "#2dd4bf",
-  Endocrine: "#818cf8",
-  Hepatic: "#d97706",
-  Ligament: "#fcd34d",
-  Gland: "#f59e0b",
-  GI: "#fb923c",
-  RenalCortex: "#34d399",
-  RenalMedulla: "#f43f5e",
-  Urinary: "#10b981",
-  Bone: "#e7e5e4",
+  Myocardium: "#9e4f5f",
+  Valve: "#cbd5e1",
+  Artery: "#a6545a",
+  Vein: "#5278a6",
+  Parenchyma: "#836ea6",
+  Airway: "#94a3b8",
+  Lymphoid: "#7c65a3",
+  Cortex: "#588eb0",
+  Ventricle: "#4d94a6",
+  Neural: "#5e82ad",
+  Ocular: "#4b9692",
+  Endocrine: "#747eb8",
+  Hepatic: "#96704c",
+  Ligament: "#a89259",
+  Gland: "#9e7c49",
+  GI: "#8f6c50",
+  RenalCortex: "#528c74",
+  RenalMedulla: "#9c5664",
+  Urinary: "#4d856f",
+  Bone: "#94a3b8",
 };
 
 const DEFAULT_STRUCTURE_BY_SYSTEM: Record<BodySystemId, HoveredStructureInfo> = {
@@ -852,14 +852,35 @@ export function BioTwin3DStage({
       side: THREE.FrontSide,
     });
 
-    const skeletonMaterial = new THREE.MeshPhysicalMaterial({
-      color: new THREE.Color("#cbd5e1"),
-      roughness: 0.55,
-      metalness: 0.08,
-      clearcoat: 0.2,
+    const skeletonMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uOpacityScale: { value: 1.0 },
+      },
+      vertexShader: `
+        varying vec3 vNormalW;
+        varying vec3 vViewDir;
+        void main() {
+          vec4 worldPos = modelMatrix * vec4(position, 1.0);
+          vNormalW = normalize(mat3(modelMatrix) * normal);
+          vViewDir = normalize(cameraPosition - worldPos.xyz);
+          gl_Position = projectionMatrix * viewMatrix * worldPos;
+        }
+      `,
+      fragmentShader: `
+        uniform float uOpacityScale;
+        varying vec3 vNormalW;
+        varying vec3 vViewDir;
+        void main() {
+          float ndotv = clamp(abs(dot(normalize(vNormalW), normalize(vViewDir))), 0.0, 1.0);
+          float rim = pow(1.0 - ndotv, 2.0);
+          vec3 col = mix(vec3(0.35, 0.45, 0.58), vec3(0.75, 0.86, 0.96), rim);
+          float alpha = mix(0.025, 0.42, rim) * uOpacityScale;
+          gl_FragColor = vec4(col, alpha);
+        }
+      `,
       transparent: true,
-      opacity: 0.2,
       depthWrite: false,
+      side: THREE.FrontSide,
     });
 
     const pulseGroups: Record<BodySystemId, THREE.Group> = {
@@ -1106,16 +1127,27 @@ export function BioTwin3DStage({
           const mat = new THREE.MeshPhysicalMaterial({
             color: baseColor.clone(),
             emissive: baseColor.clone(),
-            emissiveIntensity: isShell ? 0.18 : 0.34,
-            roughness: isShell ? 0.36 : 0.26,
-            metalness: 0.08,
-            clearcoat: 0.4,
-            clearcoatRoughness: 0.24,
+            emissiveIntensity: isShell ? 0.14 : 0.26,
+            roughness: isShell ? 0.42 : 0.34,
+            metalness: 0.06,
+            clearcoat: 0.25,
+            clearcoatRoughness: 0.3,
             transparent: true,
             opacity: baseOpacity,
-            depthWrite: !isShell,
+            depthWrite: false,
             side: isShell ? THREE.FrontSide : THREE.DoubleSide,
           });
+          mat.onBeforeCompile = (shader) => {
+            shader.fragmentShader = shader.fragmentShader.replace(
+              "#include <dithering_fragment>",
+              `
+                float holoRim = pow(1.0 - clamp(abs(dot(normalize(normal), normalize(vViewPosition))), 0.0, 1.0), 1.85);
+                gl_FragColor.rgb += totalEmissiveRadiance * holoRim * 0.9;
+                gl_FragColor.a = clamp(gl_FragColor.a * (0.34 + holoRim * 0.95), 0.04, 0.90);
+                #include <dithering_fragment>
+              `
+            );
+          };
 
           obj.material = mat;
           obj.userData = { systemId: sysId, parsed };
@@ -1315,12 +1347,12 @@ export function BioTwin3DStage({
           : effectiveMode === "vascular"
             ? 0.88
             : 0.0;
-      skeletonMaterial.opacity =
+      skeletonMaterial.uniforms.uOpacityScale.value =
         effectiveMode === "xray"
-          ? 0.26
+          ? 1.25
           : effectiveMode === "vascular"
-            ? 0.11
-            : 0.2;
+            ? 0.45
+            : 0.95;
       shellMaterial.uniforms.uFocusPos.value.lerp(
         ORGAN_ANCHORS[snapshot.selectedSystem],
         0.15
@@ -1446,18 +1478,22 @@ export function BioTwin3DStage({
           entry.material.color.lerp(targetColor, 0.14);
           entry.material.emissive.lerp(targetColor, 0.14);
 
-          let targetOpacity = isShell
-            ? 0.72
-            : entry.meta.tissueTag === "Artery" || entry.meta.tissueTag === "Vein"
-              ? 0.88
-              : 0.95;
+          let targetOpacity = isSelected
+            ? isShell
+              ? 0.52
+              : 0.72
+            : isShell
+              ? 0.32
+              : entry.meta.tissueTag === "Artery" || entry.meta.tissueTag === "Vein"
+                ? 0.48
+                : 0.44;
           if (effectiveMode === "xray") {
-            targetOpacity = isShell ? 0.26 : 0.98;
+            targetOpacity = isShell ? 0.18 : isSelected ? 0.76 : 0.50;
           } else if (effectiveMode === "vascular") {
-            targetOpacity = isVascularTissue ? (isShell ? 0.38 : 0.98) : 0.08;
+            targetOpacity = isVascularTissue ? (isShell ? 0.32 : 0.78) : 0.06;
           }
           entry.material.opacity += (targetOpacity - entry.material.opacity) * 0.16;
-          entry.material.depthWrite = entry.material.opacity >= 0.72;
+          entry.material.depthWrite = false;
           entry.mesh.renderOrder = isVascularTissue && effectiveMode === "vascular" ? 8 : isShell ? 6 : 4;
 
           const dimNonVascular = effectiveMode === "vascular" && !isVascularTissue;
