@@ -1,0 +1,39 @@
+{
+  "title": "astronaut-health-monitor",
+  "visibility": "public",
+  "type": "GIT",
+  "description": "Autonomous astronaut health monitoring and medical triage console for long-duration space missions. Built for the 2026 NASA Space Apps Challenge (Almaty).",
+  "url": "https://github.com/Mottii/astronaut-health-monitor",
+  "repo": "Mottii/astronaut-health-monitor",
+  "missions": [
+    "Artemis",
+    "ISS",
+    "Moon to Mars",
+    "NASA HRP"
+  ],
+  "categories": [
+    "NASA",
+    "Space Exploration",
+    "Human Exploration",
+    "Space Medicine",
+    "Open Source"
+  ],
+  "languages": [
+    "TypeScript",
+    "JavaScript",
+    "HTML",
+    "CSS"
+  ],
+  "operating_systems": [
+    "Linux",
+    "Windows",
+    "Mac",
+    "Web"
+  ],
+  "license": "MIT",
+  "software_types": [
+    "web-application",
+    "health-monitoring-software",
+    "telemetry-dashboard"
+  ]
+}
