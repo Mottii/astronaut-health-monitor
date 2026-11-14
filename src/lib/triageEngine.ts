@@ -1,4 +1,5 @@
 import { BODY_SYSTEM_METADATA, MISSION_ENVIRONMENTS } from "@/data/nasaHrpData";
+import { assessRenalStoneRisk } from "@/lib/clinicalThresholds";
 import {
   computeOrganSensitivityMultipliers,
   simulatePersonalizedDrugResponse,
@@ -13,10 +14,15 @@ import type {
   HealthEvaluationResult,
   MissionEnvironmentConfig,
   MissionEnvironmentId,
+  OcularFinding,
   SystemAssessment,
   TriageStatus,
   VitalReadings,
 } from "@/types/health";
+
+export interface EvaluationOptions {
+  activeDrugIds?: readonly string[];
+}
 
 function clampNumber(
   value: number,
@@ -478,7 +484,8 @@ function detectCascades(
   vitals: VitalReadings,
   envTelemetry: EnvironmentTelemetry,
   env: MissionEnvironmentConfig,
-  crewProfile?: AstronautBiologicalProfile | null
+  crewProfile?: AstronautBiologicalProfile | null,
+  options?: EvaluationOptions
 ): CascadeLink[] {
   const cascades: CascadeLink[] = [];
 
@@ -571,20 +578,22 @@ function detectCascades(
     });
   }
 
-  // 5. Hypercalciuric pharmacogenomic / urinary alkalinization renal trap (e.g. Acetazolamide -> Kidneys)
+  // 5. Stateful pharmacogenomic / urinary alkalinization renal trap (Acetazolamide -> Kidneys)
+  const hasAcetazolamideExposure = Boolean(
+    options?.activeDrugIds?.includes("neuro_acetazolamide_rx")
+  );
   if (
+    hasAcetazolamideExposure &&
     crewProfile &&
-    (crewProfile.biochemical.urinaryCalciumMgDay >= 250 ||
-      crewProfile.biochemical.urinaryCitrateMgDay <= 250) &&
-    vitals.hydrationMl <= 1450
+    assessRenalStoneRisk(crewProfile).atRisk
   ) {
     cascades.push({
       id: "drug_acetazolamide_renal",
-      title: "Hypercalciuric Profile / CA2 Shift -> CaPO4 Renal Stone",
+      title: "Acetazolamide + Hypercalciuric Risk -> CaPO4 Renal Stone",
       fromSystem: "neuro_ocular",
       toSystem: "musculoskeletal_renal",
       severity: "red",
-      mechanism: `Elevated baseline urinary calcium (${crewProfile.biochemical.urinaryCalciumMgDay} mg/d) and low citrate (${crewProfile.biochemical.urinaryCitrateMgDay} mg/d) in ${crewProfile.callsign} crystallize rapidly when renal perfusion drops or carbonic anhydrase Rx alkalinizes urine.`,
+      mechanism: `Active Acetazolamide exposure in stone-susceptible ${crewProfile.callsign} (Ca2+ ${crewProfile.biochemical.urinaryCalciumMgDay} mg/d, Citrate ${crewProfile.biochemical.urinaryCitrateMgDay} mg/d, DEXA ${crewProfile.endurance.dexaBoneTScore.toFixed(1)}) alkalinizes urine and precipitates acute CaPO4 nephrolithiasis.`,
       triggeredByHazard: "gravity",
       immediateAction:
         "Discontinue carbonic anhydrase inhibitor immediately; switch to LBNP cuffs + Potassium Citrate 20 mEq + 650 mL hydration bolus.",
@@ -603,7 +612,8 @@ export function evaluateCrewHealth(
   vitals: VitalReadings,
   envTelemetry: EnvironmentTelemetry,
   envId: MissionEnvironmentId,
-  crewProfile?: AstronautBiologicalProfile | null
+  crewProfile?: AstronautBiologicalProfile | null,
+  options?: EvaluationOptions
 ): HealthEvaluationResult {
   const env = MISSION_ENVIRONMENTS[envId];
   const clampedVitals = clampVitalReadings(vitals);
@@ -622,7 +632,8 @@ export function evaluateCrewHealth(
     clampedVitals,
     clampedEnv,
     env,
-    crewProfile
+    crewProfile,
+    options
   );
 
   // Propagate severe cascade escalations onto target organ assessments
@@ -669,12 +680,9 @@ export function evaluateCrewHealth(
       ];
     }
 
-    if (
-      crewProfile.biochemical.urinaryCalciumMgDay >= 250 ||
-      crewProfile.endurance.dexaBoneTScore <= -1.0
-    ) {
+    if (assessRenalStoneRisk(crewProfile).atRisk) {
       systems.musculoskeletal_renal.findings = [
-        `[BIOTWIN ${crewProfile.callsign}] Hypercalciuric baseline (Ca2+ ${crewProfile.biochemical.urinaryCalciumMgDay} mg/d, Citrate ${crewProfile.biochemical.urinaryCitrateMgDay} mg/d, DEXA ${crewProfile.endurance.dexaBoneTScore.toFixed(1)}) -> ${multipliers.musculoskeletal_renal.toFixed(2)}x renal stone sensitivity.`,
+        `[BIOTWIN ${crewProfile.callsign}] Stone-susceptible baseline (Ca2+ ${crewProfile.biochemical.urinaryCalciumMgDay} mg/d, Citrate ${crewProfile.biochemical.urinaryCitrateMgDay} mg/d, DEXA ${crewProfile.endurance.dexaBoneTScore.toFixed(1)}) -> ${multipliers.musculoskeletal_renal.toFixed(2)}x renal stone sensitivity.`,
         ...systems.musculoskeletal_renal.findings,
       ];
     }
@@ -735,10 +743,99 @@ export function evaluateCrewHealth(
   };
 }
 
+function blendOcularOutcome(
+  current: OcularFinding,
+  target: OcularFinding,
+  efficacyPct: number
+): OcularFinding {
+  if (target !== "clear" || efficacyPct >= 80) {
+    return target;
+  }
+  // Partial therapeutic response steps down one severity grade instead of clearing completely
+  if (current === "visual_halos") {
+    return "blurry_near";
+  }
+  return current;
+}
+
+function blendVitalsPatch(
+  current: VitalReadings,
+  patch: Partial<VitalReadings> | undefined,
+  efficacyPct: number
+): Partial<VitalReadings> {
+  if (!patch) return {};
+  const ratio = Math.min(1, Math.max(0, efficacyPct / 100));
+  const out: Partial<VitalReadings> = {};
+
+  if (typeof patch.bloodPressureSystolic === "number") {
+    out.bloodPressureSystolic = Math.round(
+      current.bloodPressureSystolic +
+        (patch.bloodPressureSystolic - current.bloodPressureSystolic) * ratio
+    );
+  }
+  if (typeof patch.bloodPressureDiastolic === "number") {
+    out.bloodPressureDiastolic = Math.round(
+      current.bloodPressureDiastolic +
+        (patch.bloodPressureDiastolic - current.bloodPressureDiastolic) * ratio
+    );
+  }
+  if (typeof patch.heartRateBpm === "number") {
+    out.heartRateBpm = Math.round(
+      current.heartRateBpm + (patch.heartRateBpm - current.heartRateBpm) * ratio
+    );
+  }
+  if (typeof patch.bloodGlucoseMgDl === "number") {
+    out.bloodGlucoseMgDl = Math.round(
+      current.bloodGlucoseMgDl +
+        (patch.bloodGlucoseMgDl - current.bloodGlucoseMgDl) * ratio
+    );
+  }
+  if (typeof patch.bodyTempC === "number") {
+    out.bodyTempC = Number(
+      (
+        current.bodyTempC +
+        (patch.bodyTempC - current.bodyTempC) * ratio
+      ).toFixed(1)
+    );
+  }
+  if (typeof patch.sleepHours === "number") {
+    out.sleepHours = Number(
+      (
+        current.sleepHours +
+        (patch.sleepHours - current.sleepHours) * ratio
+      ).toFixed(1)
+    );
+  }
+  if (typeof patch.moodScore === "number") {
+    out.moodScore = Math.round(
+      current.moodScore + (patch.moodScore - current.moodScore) * ratio
+    );
+  }
+  if (typeof patch.hydrationMl === "number") {
+    out.hydrationMl = Math.round(
+      current.hydrationMl + (patch.hydrationMl - current.hydrationMl) * ratio
+    );
+  }
+  if (patch.ocularFinding !== undefined) {
+    out.ocularFinding = blendOcularOutcome(
+      current.ocularFinding,
+      patch.ocularFinding,
+      efficacyPct
+    );
+  }
+  if (patch.aredExerciseCompleted !== undefined) {
+    out.aredExerciseCompleted =
+      efficacyPct >= 50
+        ? patch.aredExerciseCompleted
+        : current.aredExerciseCompleted;
+  }
+  return out;
+}
+
 /**
  * Applies a hardware-mapped countermeasure protocol to crew vitals and habitat telemetry
- * with physiological clamping, and injects any persona-specific cross-organ drug
- * interactions predicted by the astronaut's BioTwin pharmacogenomic profile.
+ * with physiological clamping, scaling therapeutic response by personalized efficacy
+ * and injecting any persona-specific cross-organ drug interactions.
  */
 export function applyCountermeasureToState(
   vitals: VitalReadings,
@@ -746,22 +843,27 @@ export function applyCountermeasureToState(
   action: CountermeasureActionSpec,
   crewProfile?: AstronautBiologicalProfile | null
 ): { vitals: VitalReadings; envTelemetry: EnvironmentTelemetry } {
-  let secondaryVitalsPatch: Partial<VitalReadings> = {};
-  if (crewProfile) {
-    const drugPred = simulatePersonalizedDrugResponse(
-      crewProfile,
-      action,
-      vitals,
-      envTelemetry
-    );
-    if (drugPred.secondarySystemImpact?.vitalsPatch) {
-      secondaryVitalsPatch = drugPred.secondarySystemImpact.vitalsPatch;
-    }
-  }
+  const drugPred = crewProfile
+    ? simulatePersonalizedDrugResponse(
+        crewProfile,
+        action,
+        vitals,
+        envTelemetry
+      )
+    : null;
+
+  const effectivePct = drugPred ? drugPred.efficacyPct : 100;
+  const blendedPrimaryPatch = blendVitalsPatch(
+    vitals,
+    action.vitalsPatch,
+    effectivePct
+  );
+  const secondaryVitalsPatch =
+    drugPred?.secondarySystemImpact?.vitalsPatch ?? {};
 
   const nextVitals = clampVitalReadings({
     ...vitals,
-    ...(action.vitalsPatch ?? {}),
+    ...blendedPrimaryPatch,
     ...secondaryVitalsPatch,
   });
   const nextEnv = clampEnvTelemetry({

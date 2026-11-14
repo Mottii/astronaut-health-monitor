@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -24,10 +30,12 @@ import {
   X,
 } from "lucide-react";
 import { BODY_SYSTEM_METADATA, MISSION_ENVIRONMENTS } from "@/data/nasaHrpData";
+import { ALL_BIOLOGICAL_FIELDS, RENAL_STONE } from "@/lib/clinicalThresholds";
 import {
+  CREW_PROFILE_STORAGE_KEY,
   createDefaultCrewProfilesState,
   loadCrewProfilesState,
-  parseUploadedDossierFile,
+  parseUploadedDossierReport,
   saveCrewProfilesState,
   type CrewProfilesStorageState,
 } from "@/lib/crewProfileStorage";
@@ -74,13 +82,13 @@ export default function PreFlightAdminPage() {
   const [store, setStore] = useState<CrewProfilesStorageState>(
     createDefaultCrewProfilesState
   );
-  const [hydrated, setHydrated] = useState(false);
+  const savePendingRef = useRef(false);
   const [activeView, setActiveView] = useState<AdminNavView>("dossier");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [lastIngestedFile, setLastIngestedFile] = useState<string | null>(null);
   const [uploadNotice, setUploadNotice] = useState<{
-    kind: "ok" | "err";
+    kind: "ok" | "warn" | "err";
     text: string;
   } | null>(null);
   const [consultation, setConsultation] = useState<TwinConsultationResult | null>(
@@ -90,15 +98,48 @@ export default function PreFlightAdminPage() {
   const [copiedCurl, setCopiedCurl] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const commitStore = useCallback(
+    (
+      updater: (prev: CrewProfilesStorageState) => CrewProfilesStorageState
+    ) => {
+      savePendingRef.current = true;
+      setStore((prev) => ({
+        ...updater(prev),
+        updatedAt: Date.now(),
+      }));
+    },
+    []
+  );
+
   useEffect(() => {
     setStore(loadCrewProfilesState());
-    setHydrated(true);
   }, []);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!savePendingRef.current) return;
+    savePendingRef.current = false;
     saveCrewProfilesState(store);
-  }, [store, hydrated]);
+  }, [store]);
+
+  useEffect(() => {
+    const syncFromStorage = () => {
+      const incoming = loadCrewProfilesState();
+      setStore((prev) =>
+        incoming.updatedAt > prev.updatedAt ? incoming : prev
+      );
+    };
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === null || e.key === CREW_PROFILE_STORAGE_KEY) {
+        syncFromStorage();
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("focus", syncFromStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("focus", syncFromStorage);
+    };
+  }, []);
 
   const activeProfile = useMemo(
     () =>
@@ -143,19 +184,34 @@ export default function PreFlightAdminPage() {
     updater: (prev: AstronautBiologicalProfile) => AstronautBiologicalProfile
   ) {
     setConsultation(null);
-    setStore((prev) => ({
-      ...prev,
-      profiles: prev.profiles.map((p) =>
-        p.id === activeProfile.id ? updater(p) : p
-      ),
-    }));
+    commitStore((prev) => {
+      const targetId =
+        prev.profiles.find((p) => p.id === prev.activeProfileId)?.id ??
+        prev.profiles[0]?.id;
+      return {
+        ...prev,
+        profiles: prev.profiles.map((p) => {
+          if (p.id !== targetId) return p;
+          const updated = updater(p);
+          return {
+            ...updated,
+            provenance: {
+              sourceType: "manual_override",
+              fileName: p.provenance?.fileName,
+              suppliedFields: [...ALL_BIOLOGICAL_FIELDS],
+              defaultedFields: [],
+            },
+          };
+        }),
+      };
+    });
   }
 
   function handleSelectPersona(id: string) {
     setConsultation(null);
     setUploadNotice(null);
     setLastIngestedFile(null);
-    setStore((prev) => ({ ...prev, activeProfileId: id }));
+    commitStore((prev) => ({ ...prev, activeProfileId: id }));
     setMobileNavOpen(false);
   }
 
@@ -163,17 +219,18 @@ export default function PreFlightAdminPage() {
     setUploadNotice(null);
     try {
       const text = await file.text();
-      const parsed = parseUploadedDossierFile(file.name, text);
-      if (!parsed) {
+      const result = parseUploadedDossierReport(file.name, text);
+      if (!result.ok) {
         setUploadNotice({
           kind: "err",
-          text: `Could not read biological profile from "${file.name}".`,
+          text: result.error,
         });
         return;
       }
+      const parsed = result.profile;
       setConsultation(null);
       setLastIngestedFile(file.name);
-      setStore((prev) => {
+      commitStore((prev) => {
         const exists = prev.profiles.some((p) => p.id === parsed.id);
         return {
           ...prev,
@@ -183,9 +240,18 @@ export default function PreFlightAdminPage() {
             : [...prev.profiles, parsed],
         };
       });
+      const totalFields = ALL_BIOLOGICAL_FIELDS.length;
+      const suppliedCount =
+        parsed.provenance?.suppliedFields.length ?? totalFields;
+      const defaulted = parsed.provenance?.defaultedFields ?? [];
+      const manyDefaulted = defaulted.length > totalFields / 2;
+      const detail =
+        defaulted.length > 0
+          ? `Extracted ${suppliedCount}/${totalFields} fields; ${defaulted.length} defaulted to reference baseline: ${defaulted.join(", ")}.`
+          : `Extracted ${suppliedCount}/${totalFields} fields cleanly for ${parsed.name} (${parsed.callsign}).`;
       setUploadNotice({
-        kind: "ok",
-        text: `Ingested ${file.name} -> calibrated ${parsed.name} (${parsed.callsign}).`,
+        kind: manyDefaulted ? "warn" : "ok",
+        text: `${parsed.name} (${parsed.callsign}): ${detail}`,
       });
       setActiveView("dossier");
     } catch {
@@ -228,7 +294,7 @@ export default function PreFlightAdminPage() {
   function handleResetDefaults() {
     setConsultation(null);
     setLastIngestedFile(null);
-    setStore(createDefaultCrewProfilesState());
+    commitStore(() => createDefaultCrewProfilesState());
     setUploadNotice({
       kind: "ok",
       text: "Restored 3 NASA JSC pre-flight baselines.",
@@ -251,7 +317,7 @@ export default function PreFlightAdminPage() {
 
   function handleModeChange(mode: TwinInferenceMode) {
     setConsultation(null);
-    setStore((prev) => ({
+    commitStore((prev) => ({
       ...prev,
       inferenceConfig: {
         ...prev.inferenceConfig,
@@ -283,12 +349,12 @@ export default function PreFlightAdminPage() {
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-[#141414] text-[#ececec] antialiased">
-      {/* Hidden Shared PDF / JSON File Input */}
+      {/* Hidden Shared JSON / TXT / CSV File Input */}
       <input
         ref={fileInputRef}
         data-testid="dossier-upload-input"
         type="file"
-        accept=".pdf,.json,.txt,application/pdf,application/json"
+        accept=".json,.txt,.csv,application/json,text/plain,text/csv"
         onChange={handleFileInputChange}
         className="hidden"
       />
@@ -533,6 +599,8 @@ export default function PreFlightAdminPage() {
                 className={`flex items-center justify-between gap-2 rounded-xl border px-3.5 py-2.5 text-xs ${
                   uploadNotice.kind === "ok"
                     ? "border-emerald-500/25 bg-emerald-500/[0.07] text-emerald-200"
+                    : uploadNotice.kind === "warn"
+                    ? "border-amber-500/30 bg-amber-500/[0.08] text-amber-200"
                     : "border-rose-500/30 bg-rose-500/[0.08] text-rose-200"
                 }`}
               >
@@ -566,9 +634,30 @@ export default function PreFlightAdminPage() {
                     {activeProfile.summaryTag} · Mission:{" "}
                     {MISSION_ENVIRONMENTS[activeProfile.missionAssignment].name}
                   </p>
+                  {activeProfile.provenance && (
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <span
+                        data-testid="profile-provenance-pill"
+                        className="rounded-md border border-white/[0.08] bg-[#1a1a1a] px-2 py-0.5 font-mono text-[10.5px] text-[#bdbdbd]"
+                      >
+                        {activeProfile.provenance.sourceType} ·{" "}
+                        {activeProfile.provenance.suppliedFields.length}/
+                        {ALL_BIOLOGICAL_FIELDS.length} fields supplied
+                        {activeProfile.provenance.fileName
+                          ? ` (${activeProfile.provenance.fileName})`
+                          : ""}
+                      </span>
+                      {activeProfile.provenance.defaultedFields.length > 0 && (
+                        <span className="font-mono text-[10.5px] text-amber-300">
+                          Baseline-defaulted:{" "}
+                          {activeProfile.provenance.defaultedFields.join(", ")}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
-                {/* One-Shot PDF / JSON Dropzone (Claude/Grok attachment bar aesthetic) */}
+                {/* One-Shot JSON / TXT / CSV Dropzone */}
                 <div
                   onDragOver={(e) => {
                     e.preventDefault();
@@ -588,9 +677,10 @@ export default function PreFlightAdminPage() {
                         One-Shot Crew Biological Dossier Ingestion
                       </p>
                       <p className="text-[11.5px] text-[#8e8e8e]">
-                        Drop a pre-flight JSC medical PDF or structured JSON lab
-                        report to populate blood chemistry, SOMA genomics, and
-                        chamber endurance limits automatically.
+                        Drop a structured JSON, TXT, or CSV lab report to
+                        populate blood chemistry, SOMA genomics, and chamber
+                        endurance limits automatically. Binary PDFs are
+                        rejected offline—export text or JSON first.
                       </p>
                       {lastIngestedFile && (
                         <p className="pt-1 font-mono text-[10.5px] text-emerald-300">
@@ -605,7 +695,7 @@ export default function PreFlightAdminPage() {
                       className="inline-flex shrink-0 cursor-pointer items-center gap-2 rounded-xl bg-[#ececec] px-3.5 py-2 text-xs font-medium text-[#141414] transition hover:bg-white"
                     >
                       <Upload className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>Upload PDF / JSON</span>
+                      <span>Upload JSON / TXT / CSV</span>
                     </button>
                   </div>
                 </div>
@@ -664,12 +754,14 @@ export default function PreFlightAdminPage() {
                         [
                           "24h Urinary Calcium",
                           `${activeProfile.biochemical.urinaryCalciumMgDay} mg/day`,
-                          activeProfile.biochemical.urinaryCalciumMgDay >= 250,
+                          activeProfile.biochemical.urinaryCalciumMgDay >
+                            RENAL_STONE.caHigh,
                         ],
                         [
                           "24h Urinary Citrate",
                           `${activeProfile.biochemical.urinaryCitrateMgDay} mg/day`,
-                          activeProfile.biochemical.urinaryCitrateMgDay <= 260,
+                          activeProfile.biochemical.urinaryCitrateMgDay <
+                            RENAL_STONE.citrateLow,
                         ],
                         [
                           "Serum CTX (Resorption)",
@@ -859,15 +951,46 @@ export default function PreFlightAdminPage() {
                 {consultation && (
                   <div
                     data-testid="twin-consultation-output"
-                    className="rounded-2xl border border-white/[0.08] bg-[#1a1a1a] p-4"
+                    className="space-y-3 rounded-2xl border border-white/[0.08] bg-[#1a1a1a] p-4"
                   >
-                    <div className="flex items-center gap-2 font-mono text-[11px] text-[#9b9b9b]">
-                      <Activity className="h-3.5 w-3.5 text-emerald-400" />
-                      <span>{consultation.engineUsed}</span>
+                    <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-[11px] text-[#9b9b9b]">
+                      <span className="inline-flex items-center gap-2">
+                        <Activity className="h-3.5 w-3.5 text-emerald-400" />
+                        <span>{consultation.engineUsed}</span>
+                      </span>
+                      <span className="rounded bg-white/[0.06] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#bdbdbd]">
+                        {consultation.source}
+                      </span>
                     </div>
-                    <pre className="mt-3 whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-[#e5e5e5]">
-                      {consultation.summaryText}
-                    </pre>
+
+                    {consultation.source === "fallback" &&
+                      consultation.fallbackReason && (
+                        <div
+                          data-testid="consultation-fallback-banner"
+                          className="rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2 text-xs text-amber-200"
+                        >
+                          Remote/local LLM unreachable ({consultation.fallbackReason})
+                          — displaying offline mechanistic synthesis.
+                        </div>
+                      )}
+
+                    <div className="rounded-xl border border-white/[0.08] bg-[#141414] p-3">
+                      <p className="font-mono text-[10px] uppercase tracking-wider text-[#9b9b9b]">
+                        Deterministic Clinical Guardrails
+                      </p>
+                      <p className="mt-1 text-xs leading-relaxed text-[#ececec]">
+                        {consultation.deterministicGuardrail}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="font-mono text-[10px] uppercase tracking-wider text-[#8e8e8e]">
+                        Advisory Model Synthesis
+                      </p>
+                      <pre className="mt-1.5 whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-[#e5e5e5]">
+                        {consultation.summaryText}
+                      </pre>
+                    </div>
                   </div>
                 )}
 
@@ -991,41 +1114,97 @@ export default function PreFlightAdminPage() {
                 </div>
 
                 {store.inferenceConfig.mode === "local_ollama_llm" && (
-                  <div className="grid grid-cols-1 gap-3 rounded-2xl border border-white/[0.06] bg-[#1a1a1a] p-4 sm:grid-cols-2">
-                    <label className="text-xs text-[#9b9b9b]">
-                      Local Endpoint URL
-                      <input
-                        type="text"
-                        value={store.inferenceConfig.localEndpointUrl}
-                        onChange={(e) =>
-                          setStore((prev) => ({
-                            ...prev,
-                            inferenceConfig: {
-                              ...prev.inferenceConfig,
-                              localEndpointUrl: e.target.value,
-                            },
-                          }))
-                        }
-                        className="mt-1.5 w-full rounded-xl border border-white/[0.08] bg-[#121212] px-3 py-2 font-mono text-xs text-[#ececec] focus:border-white/25 focus:outline-none"
-                      />
-                    </label>
-                    <label className="text-xs text-[#9b9b9b]">
-                      Local Model Name
-                      <input
-                        type="text"
-                        value={store.inferenceConfig.localModelName}
-                        onChange={(e) =>
-                          setStore((prev) => ({
-                            ...prev,
-                            inferenceConfig: {
-                              ...prev.inferenceConfig,
-                              localModelName: e.target.value,
-                            },
-                          }))
-                        }
-                        className="mt-1.5 w-full rounded-xl border border-white/[0.08] bg-[#121212] px-3 py-2 font-mono text-xs text-[#ececec] focus:border-white/25 focus:outline-none"
-                      />
-                    </label>
+                  <div className="space-y-3 rounded-2xl border border-white/[0.06] bg-[#1a1a1a] p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] text-[#8e8e8e]">
+                        Quick Presets (Localhost Blackout Runtime)
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            commitStore((prev) => ({
+                              ...prev,
+                              inferenceConfig: {
+                                ...prev.inferenceConfig,
+                                localEndpointUrl:
+                                  "http://localhost:11434/v1/chat/completions",
+                                localModelName:
+                                  prev.inferenceConfig.localModelName ||
+                                  "llama3.1:8b",
+                              },
+                            }))
+                          }
+                          className="cursor-pointer rounded-lg border border-white/[0.08] bg-[#121212] px-2.5 py-1 font-mono text-[11px] text-[#d4d4d4] hover:border-white/25 hover:text-white"
+                        >
+                          Ollama (:11434)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            commitStore((prev) => ({
+                              ...prev,
+                              inferenceConfig: {
+                                ...prev.inferenceConfig,
+                                localEndpointUrl:
+                                  "http://localhost:1234/v1/chat/completions",
+                                localModelName: "local-model",
+                              },
+                            }))
+                          }
+                          className="cursor-pointer rounded-lg border border-white/[0.08] bg-[#121212] px-2.5 py-1 font-mono text-[11px] text-[#d4d4d4] hover:border-white/25 hover:text-white"
+                        >
+                          LM Studio (:1234)
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <label className="text-xs text-[#9b9b9b]">
+                        Local Endpoint URL
+                        <input
+                          type="text"
+                          value={store.inferenceConfig.localEndpointUrl}
+                          onChange={(e) =>
+                            commitStore((prev) => ({
+                              ...prev,
+                              inferenceConfig: {
+                                ...prev.inferenceConfig,
+                                localEndpointUrl: e.target.value,
+                              },
+                            }))
+                          }
+                          className="mt-1.5 w-full rounded-xl border border-white/[0.08] bg-[#121212] px-3 py-2 font-mono text-xs text-[#ececec] focus:border-white/25 focus:outline-none"
+                        />
+                      </label>
+                      <label className="text-xs text-[#9b9b9b]">
+                        Local Model Name
+                        <input
+                          type="text"
+                          value={store.inferenceConfig.localModelName}
+                          onChange={(e) =>
+                            commitStore((prev) => ({
+                              ...prev,
+                              inferenceConfig: {
+                                ...prev.inferenceConfig,
+                                localModelName: e.target.value,
+                              },
+                            }))
+                          }
+                          className="mt-1.5 w-full rounded-xl border border-white/[0.08] bg-[#121212] px-3 py-2 font-mono text-xs text-[#ececec] focus:border-white/25 focus:outline-none"
+                        />
+                      </label>
+                    </div>
+
+                    <p className="text-[11px] text-[#7c7c7c]">
+                      Browser CORS note: start Ollama with{" "}
+                      <code className="font-mono text-[#b4b4b4]">
+                        OLLAMA_ORIGINS=&quot;*&quot;
+                      </code>{" "}
+                      so direct browser requests to localhost succeed; if
+                      unreachable, consultation falls back cleanly to deterministic
+                      guardrails.
+                    </p>
                   </div>
                 )}
 
@@ -1038,7 +1217,7 @@ export default function PreFlightAdminPage() {
                           type="text"
                           value={store.inferenceConfig.openApiEndpointUrl}
                           onChange={(e) =>
-                            setStore((prev) => ({
+                            commitStore((prev) => ({
                               ...prev,
                               inferenceConfig: {
                                 ...prev.inferenceConfig,
@@ -1056,7 +1235,7 @@ export default function PreFlightAdminPage() {
                           placeholder="sk-..."
                           value={store.inferenceConfig.openApiKey}
                           onChange={(e) =>
-                            setStore((prev) => ({
+                            commitStore((prev) => ({
                               ...prev,
                               inferenceConfig: {
                                 ...prev.inferenceConfig,
@@ -1068,6 +1247,21 @@ export default function PreFlightAdminPage() {
                         />
                       </label>
                     </div>
+                    <p className="text-[11px] text-[#7c7c7c]">
+                      Security: Bearer keys are kept in browser{" "}
+                      <code className="font-mono text-[#b4b4b4]">
+                        sessionStorage
+                      </code>{" "}
+                      only (cleared when the tab closes, never written to{" "}
+                      <code className="font-mono text-[#b4b4b4]">
+                        localStorage
+                      </code>{" "}
+                      or proxied through{" "}
+                      <code className="font-mono text-[#b4b4b4]">
+                        /api/twin-simulate
+                      </code>
+                      ).
+                    </p>
                   </div>
                 )}
 
@@ -1109,7 +1303,7 @@ export default function PreFlightAdminPage() {
                     </h1>
                     <p className="text-xs text-[#8e8e8e]">
                       Rare exception editor. Routine onboarding should use
-                      one-shot PDF/JSON dossier ingestion.
+                      one-shot JSON, TXT, or CSV dossier ingestion.
                     </p>
                   </div>
 
@@ -1312,6 +1506,11 @@ export default function PreFlightAdminPage() {
                 </div>
               </>
             )}
+
+            <footer className="border-t border-white/[0.06] pt-4 text-[11px] text-[#676767]">
+              ARES-TWIN/1.0 (NASA SSM · SMO 016E · SOMA-informed) · Synthetic
+              demonstration profiles — educational simulation, not medical advice.
+            </footer>
           </div>
         </main>
       </div>

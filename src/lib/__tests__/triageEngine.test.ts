@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_CREW_PROFILES,
   DEMO_SCENARIOS,
   EXECUTABLE_COUNTERMEASURES,
   MISSION_ENVIRONMENTS,
 } from "@/data/nasaHrpData";
+import { simulatePersonalizedDrugResponse } from "@/lib/twinEngine";
 import {
   applyCountermeasureToState,
   clampVitalReadings,
@@ -307,5 +309,96 @@ describe("triageEngine", () => {
     expect(packet).toContain("ESCALATED [5.9 mm]");
     expect(packet).toContain("[EXECUTED COUNTERMEASURES]");
     expect(packet).toContain("Engage LBNP Chibis / Venous Thigh Cuffs");
+  });
+
+  it("keeps drug_acetazolamide_renal cascade stateful behind activeDrugIds and models efficacy/prophylaxis", () => {
+    const vance = DEFAULT_CREW_PROFILES.find((p) => p.id === "ares_1_vance")!;
+    const chen = DEFAULT_CREW_PROFILES.find((p) => p.id === "ares_2_chen")!;
+    const allActions = Object.values(EXECUTABLE_COUNTERMEASURES).flat();
+    const acetazolamide = allActions.find(
+      (a) => a.id === "neuro_acetazolamide_rx"
+    )!;
+    const potassiumCitrate = allActions.find(
+      (a) => a.id === "renal_potassium_citrate"
+    )!;
+    const issEnv = MISSION_ENVIRONMENTS.iss_orbit.defaultTelemetry;
+    const sans = getScenario("sans_co2_fluid_shift");
+
+    // (a) Chen dehydrated WITHOUT acetazolamide does NOT trigger drug_acetazolamide_renal
+    const dehydratedVitals: VitalReadings = {
+      ...sans.vitals,
+      hydrationMl: 1380,
+    };
+    const chenDehydratedNoDrug = evaluateCrewHealth(
+      dehydratedVitals,
+      issEnv,
+      "iss_orbit",
+      chen
+    );
+    expect(
+      chenDehydratedNoDrug.activeCascades.some(
+        (c) => c.id === "drug_acetazolamide_renal"
+      )
+    ).toBe(false);
+    expect(
+      chenDehydratedNoDrug.activeCascades.some(
+        (c) => c.id === "bone_calcium_renal"
+      )
+    ).toBe(true);
+
+    // (b) Chen WITH activeDrugIds: ["neuro_acetazolamide_rx"] triggers drug_acetazolamide_renal
+    const chenWithDrug = evaluateCrewHealth(
+      { ...sans.vitals, hydrationMl: 1950 },
+      issEnv,
+      "iss_orbit",
+      chen,
+      { activeDrugIds: ["neuro_acetazolamide_rx"] }
+    );
+    expect(
+      chenWithDrug.activeCascades.some(
+        (c) => c.id === "drug_acetazolamide_renal"
+      )
+    ).toBe(true);
+
+    // (c) Vance WITH acetazolamide clears ocular finding and does not trigger renal drug cascade
+    const postVance = applyCountermeasureToState(
+      sans.vitals,
+      sans.envTelemetry,
+      acetazolamide,
+      vance
+    );
+    expect(postVance.vitals.ocularFinding).toBe("clear");
+    const vanceWithDrug = evaluateCrewHealth(
+      postVance.vitals,
+      postVance.envTelemetry,
+      "iss_orbit",
+      vance,
+      { activeDrugIds: ["neuro_acetazolamide_rx"] }
+    );
+    expect(
+      vanceWithDrug.activeCascades.some(
+        (c) => c.id === "drug_acetazolamide_renal"
+      )
+    ).toBe(false);
+
+    // (d) Chen WITH acetazolamide starting from visual_halos steps down to blurry_near (partial relief, not clear)
+    const postChenFromHalos = applyCountermeasureToState(
+      { ...sans.vitals, ocularFinding: "visual_halos" },
+      sans.envTelemetry,
+      acetazolamide,
+      chen
+    );
+    expect(postChenFromHalos.vitals.ocularFinding).toBe("blurry_near");
+
+    // (e) Potassium citrate on Chen is high-efficacy protective prophylaxis without CYP poor-metabolizer warning
+    const citratePred = simulatePersonalizedDrugResponse(
+      chen,
+      potassiumCitrate,
+      sans.vitals,
+      issEnv
+    );
+    expect(citratePred.basis).toBe("profile_rule");
+    expect(citratePred.efficacyPct).toBe(96);
+    expect(citratePred.contraindicationSeverity).toBe("none");
   });
 });

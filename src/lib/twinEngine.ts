@@ -2,6 +2,7 @@ import {
   EXECUTABLE_COUNTERMEASURES,
   MISSION_ENVIRONMENTS,
 } from "@/data/nasaHrpData";
+import { assessRenalStoneRisk, RENAL_STONE } from "@/lib/clinicalThresholds";
 import type {
   AstronautBiologicalProfile,
   BodySystemId,
@@ -16,90 +17,101 @@ import type {
   VitalReadings,
 } from "@/types/health";
 
-function clamp(val: number, min: number, max: number): number {
-  if (!Number.isFinite(val)) return min;
-  return Number(Math.min(max, Math.max(min, val)).toFixed(2));
+const ACETAZOLAMIDE_RULE = {
+  renalRiskEfficacyPct: 62,
+  mtrrRiskEfficacyPct: 84,
+  nominalEfficacyPct: 91,
+  renalRiskHalfLifeH: 8.5,
+  nominalHalfLifeH: 6.2,
+  diureticDepletionMl: 350,
+  renalScoreDelta: -28,
+} as const;
+
+const LBNP_RULE = {
+  mtrrHighSlopeEfficacyPct: 92,
+  nominalEfficacyPct: 95,
+  equivalentWindowH: 4.0,
+} as const;
+
+const POTASSIUM_CITRATE_RULE = {
+  atRiskEfficacyPct: 96,
+  nominalEfficacyPct: 93,
+} as const;
+
+const CYP_BASE_HALF_LIFE_H = 5.5;
+const OLLAMA_PROBE_TIMEOUT_MS = 2000;
+const LOCAL_LLM_TIMEOUT_MS = 30000;
+const OPEN_API_TIMEOUT_MS = 15000;
+
+/**
+ * Smooth asymptotic saturation curve so extreme risk profiles approach the
+ * ceiling smoothly without saturating or losing monotonicity.
+ */
+function softMultiplier(load: number, min: number, asymptote: number): number {
+  const safeLoad = Number.isFinite(load) ? Math.max(0, load) : 0;
+  const raw = min + (asymptote - min) * (1 - Math.exp(-safeLoad));
+  return Number(raw.toFixed(2));
 }
 
 /**
  * Derives 6-system sensitivity weights from pre-flight NASA SSM biochemistry,
  * SOMA pharmacogenomics (MTRR/CYP450/ATM), and JSC chamber stress endurance slopes.
+ * Core systems stay strictly below 1.85x; secondary systems strictly below 1.65x.
  */
 export function computeOrganSensitivityMultipliers(
   profile: AstronautBiologicalProfile
 ): OrganSensitivityMultipliers {
   const { biochemical, pharmacogenomics, endurance } = profile;
 
-  const mtrrDelta =
+  const mtrrLoad =
     pharmacogenomics.mtrrGenotype === "GG_sans_risk"
-      ? 0.35
+      ? 0.5
       : pharmacogenomics.mtrrGenotype === "AG_heterozygous"
-      ? 0.15
+      ? 0.22
       : -0.08;
-  const neuroRaw =
-    1.0 +
-    mtrrDelta +
-    (endurance.co2ReactivitySlope - 1.0) * 0.45 +
-    (endurance.baselineOnsdMm > 4.9 ? (endurance.baselineOnsdMm - 4.9) * 0.6 : 0);
+  const neuroLoad =
+    0.3 +
+    mtrrLoad +
+    (endurance.co2ReactivitySlope - 1.0) * 0.65 +
+    (endurance.baselineOnsdMm - 4.6) * 0.55;
 
-  const caDelta =
-    biochemical.urinaryCalciumMgDay > 220
-      ? (biochemical.urinaryCalciumMgDay - 220) / 160
-      : (biochemical.urinaryCalciumMgDay - 200) / 300;
-  const citrateDelta =
-    biochemical.urinaryCitrateMgDay < 300
-      ? (300 - biochemical.urinaryCitrateMgDay) / 280
-      : -0.05;
-  const ctxDelta =
-    biochemical.serumCtxPgMl > 400 ? (biochemical.serumCtxPgMl - 400) / 700 : 0;
-  const dexaDelta =
-    endurance.dexaBoneTScore < -0.5 ? (-endurance.dexaBoneTScore - 0.5) * 0.25 : 0;
-  const renalRaw = 0.95 + caDelta + citrateDelta + ctxDelta + dexaDelta;
+  const caLoad = (biochemical.urinaryCalciumMgDay - 180) / 240;
+  const citrateLoad = (380 - biochemical.urinaryCitrateMgDay) / 380;
+  const ctxLoad = (biochemical.serumCtxPgMl - 320) / 900;
+  const dexaLoad = -endurance.dexaBoneTScore * 0.2;
+  const renalLoad = 0.3 + caLoad + citrateLoad + ctxLoad + dexaLoad;
 
-  const atmDelta =
-    pharmacogenomics.atmDnaRepairScore < 0.95
-      ? (0.95 - pharmacogenomics.atmDnaRepairScore) * 1.4
-      : (0.95 - pharmacogenomics.atmDnaRepairScore) * 0.3;
-  const alcDelta =
-    biochemical.baselineLymphocyteCount < 1800
-      ? (1800 - biochemical.baselineLymphocyteCount) / 1400
-      : -0.05;
-  const radTolDelta =
-    endurance.radiationToleranceMsvDay < 1.9
-      ? (1.9 - endurance.radiationToleranceMsvDay) * 0.5
-      : -0.04;
-  const immuneRaw = 0.95 + atmDelta + alcDelta + radTolDelta;
+  const atmLoad = (1.0 - pharmacogenomics.atmDnaRepairScore) * 1.45;
+  const alcLoad = (2100 - biochemical.baselineLymphocyteCount) / 1400;
+  const radTolLoad = (2.0 - endurance.radiationToleranceMsvDay) * 0.6;
+  const immuneLoad = 0.3 + atmLoad + alcLoad + radTolLoad;
 
-  const cvRaw =
-    0.95 +
-    (32 - endurance.lbnpEnduranceMin) * 0.02 +
-    (biochemical.serumFerritinNgMl > 160 ? 0.08 : 0);
+  const cvLoad =
+    0.33 +
+    (32 - endurance.lbnpEnduranceMin) * 0.03 +
+    (biochemical.serumFerritinNgMl - 110) / 400;
 
-  const metRaw =
-    0.92 +
-    (pharmacogenomics.cyp2c9Phenotype === "poor"
-      ? 0.2
+  const cyp2c9Load =
+    pharmacogenomics.cyp2c9Phenotype === "poor"
+      ? 0.35
       : pharmacogenomics.cyp2c9Phenotype === "intermediate"
-      ? 0.08
-      : 0) +
-    (biochemical.serumFerritinNgMl > 160 ? 0.08 : 0);
+      ? 0.15
+      : 0;
+  const metLoad =
+    0.33 + cyp2c9Load + (biochemical.serumFerritinNgMl - 110) / 350;
 
-  const behRaw =
-    0.92 +
-    (biochemical.baselineNflPgMl > 10
-      ? (biochemical.baselineNflPgMl - 10) * 0.06
-      : 0) +
-    (endurance.co2ReactivitySlope > 1.2
-      ? (endurance.co2ReactivitySlope - 1.2) * 0.25
-      : 0);
+  const behLoad =
+    0.33 +
+    (biochemical.baselineNflPgMl - 9.5) * 0.08 +
+    (endurance.co2ReactivitySlope - 1.0) * 0.35;
 
   return {
-    neuro_ocular: clamp(neuroRaw, 0.7, 1.85),
-    cardiovascular: clamp(cvRaw, 0.75, 1.65),
-    musculoskeletal_renal: clamp(renalRaw, 0.7, 1.85),
-    metabolic_endocrine: clamp(metRaw, 0.75, 1.65),
-    immune_hematology: clamp(immuneRaw, 0.7, 1.85),
-    behavioral_circadian: clamp(behRaw, 0.75, 1.65),
+    neuro_ocular: softMultiplier(neuroLoad, 0.7, 1.84),
+    cardiovascular: softMultiplier(cvLoad, 0.75, 1.64),
+    musculoskeletal_renal: softMultiplier(renalLoad, 0.7, 1.84),
+    metabolic_endocrine: softMultiplier(metLoad, 0.75, 1.64),
+    immune_hematology: softMultiplier(immuneLoad, 0.7, 1.84),
+    behavioral_circadian: softMultiplier(behLoad, 0.75, 1.64),
   };
 }
 
@@ -136,8 +148,8 @@ function getPhenotypePkParams(
 }
 
 /**
- * Predicts personalized efficacy, CYP450 clearance half-life, and cross-organ
- * contraindications for a countermeasure tested on an astronaut's BioTwin profile.
+ * Predicts rule-based personalized efficacy, CYP450 clearance scaling, and
+ * cross-organ contraindications for a countermeasure on an astronaut's BioTwin.
  */
 export function simulatePersonalizedDrugResponse(
   profile: AstronautBiologicalProfile,
@@ -146,51 +158,52 @@ export function simulatePersonalizedDrugResponse(
   _currentEnv: EnvironmentTelemetry
 ): DrugSimulationPrediction {
   const { biochemical, pharmacogenomics, endurance } = profile;
+  const stoneRisk = assessRenalStoneRisk(profile);
 
   // Carbonic anhydrase inhibitor (Acetazolamide) -> Cross-organ renal stone trap
   if (action.id === "neuro_acetazolamide_rx") {
-    const hypercalciuric =
-      biochemical.urinaryCalciumMgDay >= 250 ||
-      biochemical.urinaryCitrateMgDay <= 250 ||
-      endurance.dexaBoneTScore <= -1.0;
-
-    if (hypercalciuric) {
+    if (stoneRisk.atRisk) {
       return {
         actionId: action.id,
-        efficacyPct: 62,
+        basis: "profile_rule",
+        efficacyPct: ACETAZOLAMIDE_RULE.renalRiskEfficacyPct,
         recommendedDoseAdjustment: "AVOID Rx — Switch to LBNP + CDRA Scrub",
-        clearanceHalfLifeHours: 8.5,
+        clearanceHalfLifeHours: ACETAZOLAMIDE_RULE.renalRiskHalfLifeH,
         contraindicationSeverity: "contraindicated",
-        contraindicationWarning: `CONTRAINDICATED FOR ${profile.callsign}: Carbonic anhydrase inhibition alkalinizes urine (pH > 7.2) and depletes citrate (${biochemical.urinaryCitrateMgDay} mg/d), precipitating CaPO4 renal stones given baseline hypercalciuria (${biochemical.urinaryCalciumMgDay} mg/d, CTX ${biochemical.serumCtxPgMl} pg/mL).`,
+        contraindicationWarning: `CONTRAINDICATED FOR ${profile.callsign}: Carbonic anhydrase inhibition alkalinizes urine (pH > 7.2) and depletes citrate (${biochemical.urinaryCitrateMgDay} mg/d), precipitating CaPO4 renal stones (${stoneRisk.factors.join(", ")}; Ca2+ ${biochemical.urinaryCalciumMgDay} mg/d, DEXA ${endurance.dexaBoneTScore.toFixed(1)}).`,
         secondarySystemImpact: {
           systemId: "musculoskeletal_renal",
-          scoreDelta: -28,
+          scoreDelta: ACETAZOLAMIDE_RULE.renalScoreDelta,
           vitalsPatch: {
-            hydrationMl: Math.min(currentVitals.hydrationMl, 1380),
-            aredExerciseCompleted: false,
+            hydrationMl: Math.max(
+              400,
+              currentVitals.hydrationMl - ACETAZOLAMIDE_RULE.diureticDepletionMl
+            ),
           },
           mechanism:
-            "Acetazolamide-induced hypercalciuric tubular alkalinization precipitates acute nephrolithiasis in high-bone-turnover profiles.",
+            "Acetazolamide-induced diuresis and proximal tubular alkalinization precipitate acute nephrolithiasis in stone-susceptible profiles.",
         },
         mechanisticRationale:
-          "Blocks choroid plexus bicarbonate transport to reduce CSF secretion, but induces metabolic acidosis and proximal tubular bicarbonate wasting in the kidney.",
+          "Blocks choroid plexus bicarbonate transport to reduce CSF secretion, but induces osmotic/bicarbonate diuresis and hypocitraturic urine alkalinization.",
       };
     }
 
     const isMtrrRisk = pharmacogenomics.mtrrGenotype === "GG_sans_risk";
     return {
       actionId: action.id,
-      efficacyPct: isMtrrRisk ? 84 : 91,
+      basis: "profile_rule",
+      efficacyPct: isMtrrRisk
+        ? ACETAZOLAMIDE_RULE.mtrrRiskEfficacyPct
+        : ACETAZOLAMIDE_RULE.nominalEfficacyPct,
       recommendedDoseAdjustment: isMtrrRisk
         ? "250 mg PO + B-Complex / Folate Cofactor Protocol"
         : "Standard 250 mg PO q12h",
-      clearanceHalfLifeHours: 6.2,
+      clearanceHalfLifeHours: ACETAZOLAMIDE_RULE.nominalHalfLifeH,
       contraindicationSeverity: isMtrrRisk ? "caution" : "none",
       contraindicationWarning: isMtrrRisk
         ? "MTRR 66GG allele detected: co-administer methylfolate/B-vitamins + LBNP cuffs for durable optic disc relief."
         : undefined,
-      mechanisticRationale:
-        "Normocalciuric renal clearance (urinary Ca2+ < 220 mg/d, adequate citrate reserve) permits safe short-course ICP reduction.",
+      mechanisticRationale: `Normocalciuric renal reserve (Ca2+ <= ${RENAL_STONE.caHigh} mg/d, Citrate >= ${RENAL_STONE.citrateLow} mg/d) permits short-course ICP reduction.`,
     };
   }
 
@@ -198,51 +211,81 @@ export function simulatePersonalizedDrugResponse(
   if (action.id === "neuro_lbnp_cuffs") {
     const isMtrrRisk = pharmacogenomics.mtrrGenotype === "GG_sans_risk";
     const efficacy =
-      isMtrrRisk && endurance.co2ReactivitySlope > 1.3 ? 92 : 95;
+      isMtrrRisk && endurance.co2ReactivitySlope > 1.3
+        ? LBNP_RULE.mtrrHighSlopeEfficacyPct
+        : LBNP_RULE.nominalEfficacyPct;
     return {
       actionId: action.id,
+      basis: "profile_rule",
       efficacyPct: efficacy,
       recommendedDoseAdjustment:
         endurance.lbnpEnduranceMin < 30
-          ? "Graduated -25 mmHg (2 x 20 min cycles to respect 28m LBNP baroreflex limit)"
+          ? `Graduated -25 mmHg (2 x 20 min cycles to respect ${endurance.lbnpEnduranceMin}m LBNP baroreflex limit)`
           : "Full -35 mmHg 30-min LBNP draw",
-      clearanceHalfLifeHours: 4.0,
+      clearanceHalfLifeHours: LBNP_RULE.equivalentWindowH,
       contraindicationSeverity: "none",
       mechanisticRationale:
         "Zero-nephrotoxicity mechanical venous pooling reverses cephalad fluid shift without disturbing urinary citrate or pH.",
     };
   }
 
+  // Renal stone citrate prophylaxis (non-CYP urinary alkalinizing electrolyte)
+  if (action.protectiveFor === "renal_stone") {
+    return {
+      actionId: action.id,
+      basis: "profile_rule",
+      efficacyPct: stoneRisk.atRisk
+        ? POTASSIUM_CITRATE_RULE.atRiskEfficacyPct
+        : POTASSIUM_CITRATE_RULE.nominalEfficacyPct,
+      recommendedDoseAdjustment: stoneRisk.atRisk
+        ? "Priority Stone Prophylaxis — 20 mEq + 650 mL bolus (restores urinary citrate)"
+        : "Standard prophylaxis (20 mEq + 650 mL bolus)",
+      clearanceHalfLifeHours: 0,
+      contraindicationSeverity: "none",
+      mechanisticRationale:
+        "Exogenous potassium citrate replenishes urinary citrate inhibitor reserve and complexes ionized Ca2+ without hepatic CYP450 clearance.",
+    };
+  }
+
   // Pharmacological CYP2D6 / CYP2C9 substrates
-  if (action.isPharmacological) {
+  if (
+    action.isPharmacological &&
+    (action.primaryEnzyme === "CYP2D6" || action.primaryEnzyme === "CYP2C9")
+  ) {
     const enzymePhenotype =
       action.primaryEnzyme === "CYP2D6"
         ? pharmacogenomics.cyp2d6Phenotype
         : pharmacogenomics.cyp2c9Phenotype;
-    const pk = getPhenotypePkParams(enzymePhenotype, 5.5);
+    const pk = getPhenotypePkParams(enzymePhenotype, CYP_BASE_HALF_LIFE_H);
 
     const caution =
       enzymePhenotype === "poor" || enzymePhenotype === "ultra_rapid";
     return {
       actionId: action.id,
+      basis: "phenotype_scaling",
       efficacyPct: Math.min(98, Math.max(68, 90 + pk.efficacyBonus)),
       recommendedDoseAdjustment: pk.doseNote,
       clearanceHalfLifeHours: pk.halfLifeHours,
       contraindicationSeverity: caution ? "caution" : "none",
       contraindicationWarning:
         enzymePhenotype === "poor"
-          ? `${action.primaryEnzyme ?? "CYP450"} Poor Metabolizer: extended t1/2 (${pk.halfLifeHours}h) increases hepatic accumulation risk.`
+          ? `${action.primaryEnzyme} Poor Metabolizer: extended t1/2 (${pk.halfLifeHours}h) increases hepatic accumulation risk.`
           : enzymePhenotype === "ultra_rapid"
-          ? `${action.primaryEnzyme ?? "CYP450"} Ultra-Rapid Metabolizer: sub-therapeutic trough possible without split dosing.`
+          ? `${action.primaryEnzyme} Ultra-Rapid Metabolizer: sub-therapeutic trough possible without split dosing.`
           : undefined,
-      mechanisticRationale: `Tailored via pre-flight ${action.primaryEnzyme ?? "CYP450"} phenotype (${enzymePhenotype}) and SMO 016E biochemical reserve.`,
+      mechanisticRationale: `Phenotype-scaled clearance estimate for ${action.primaryEnzyme} (${enzymePhenotype}) combined with SMO 016E baseline.`,
     };
   }
 
   // Hardware / environmental / behavioral protocols
   return {
     actionId: action.id,
-    efficacyPct: action.id === "imm_storm_shelter" && endurance.radiationToleranceMsvDay < 1.6 ? 97 : 94,
+    basis: "profile_rule",
+    efficacyPct:
+      action.id === "imm_storm_shelter" &&
+      endurance.radiationToleranceMsvDay < 1.6
+        ? 97
+        : 94,
     recommendedDoseAdjustment:
       action.systemId === "immune_hematology" &&
       biochemical.baselineLymphocyteCount < 1600
@@ -257,20 +300,19 @@ export function simulatePersonalizedDrugResponse(
 
 /**
  * Executes NASA JSC L-180/L-90 Pre-Flight Qualification Stress Suite to quantify
- * each astronaut's endurance envelope before launch.
+ * each astronaut's endurance envelope before launch. Each assay evaluates its own
+ * independent biological criteria without cross-assay status leakage.
  */
 export function runPreFlightQualificationSuite(
   profile: AstronautBiologicalProfile
 ): PreFlightQualificationTestResult[] {
   const mults = computeOrganSensitivityMultipliers(profile);
+  const stoneRisk = assessRenalStoneRisk(profile);
 
   // 1. Hypercapnic CO2 Chamber (4.5 mmHg)
-  const co2Score = Math.max(
-    18,
-    Math.round(96 - 44 * mults.neuro_ocular)
-  );
+  const co2Score = Math.max(15, Math.round(104 - 46 * mults.neuro_ocular));
   const co2Status: PreFlightQualificationTestResult["status"] =
-    co2Score < 50 ? "caution" : "pass";
+    co2Score < 55 ? "caution" : "pass";
 
   // 2. Acetazolamide 250 mg Renal Safety Trial
   const acetazolamideSpec = EXECUTABLE_COUNTERMEASURES.neuro_ocular.find(
@@ -294,25 +336,18 @@ export function runPreFlightQualificationSuite(
     MISSION_ENVIRONMENTS.iss_orbit.defaultTelemetry
   );
 
-  // 3. 0g Bone Unloading & Dehydration Tolerance
+  // 3. 0g Bone Unloading & Dehydration Tolerance (independent of Acetazolamide verdict)
   const boneScore = Math.max(
     15,
-    Math.round(96 - 45 * mults.musculoskeletal_renal)
+    Math.round(104 - 46 * mults.musculoskeletal_renal)
   );
   const boneStatus: PreFlightQualificationTestResult["status"] =
-    acetazolamidePred.contraindicationSeverity === "contraindicated" || boneScore < 42
-      ? "contraindicated"
-      : boneScore < 65
-      ? "caution"
-      : "pass";
+    stoneRisk.atRisk || boneScore < 55 ? "caution" : "pass";
 
   // 4. Solar Particle Event (3.2 mSv/day) Hematopoietic Tolerance
-  const radScore = Math.max(
-    14,
-    Math.round(96 - 48 * mults.immune_hematology)
-  );
+  const radScore = Math.max(15, Math.round(104 - 46 * mults.immune_hematology));
   const radStatus: PreFlightQualificationTestResult["status"] =
-    radScore < 45 ? "caution" : "pass";
+    radScore < 55 ? "caution" : "pass";
 
   return [
     {
@@ -357,10 +392,9 @@ export function runPreFlightQualificationSuite(
       status: boneStatus,
       predictedScore: boneScore,
       enduranceLimitLabel: `DEXA ${profile.endurance.dexaBoneTScore.toFixed(1)} · CTX ${profile.biochemical.serumCtxPgMl} pg/mL`,
-      clinicalSummary:
-        profile.biochemical.urinaryCalciumMgDay >= 250
-          ? `Baseline hypercalciuria (${profile.biochemical.urinaryCalciumMgDay} mg/d) + osteopenic T-score (${profile.endurance.dexaBoneTScore}) demands strict >= 2,600 mL/day hydration.`
-          : `Low baseline Ca2+ excretion preserves wide renal stone margin.`,
+      clinicalSummary: stoneRisk.atRisk
+        ? `Renal stone susceptibility (${stoneRisk.factors.join(", ")}) demands >= 2,600 mL/day hydration + Potassium Citrate.`
+        : `Low baseline Ca2+ excretion preserves wide renal stone margin.`,
       recommendedInFlightCountermeasure:
         "Potassium Citrate 20 mEq + Daily ARED Axial Loading",
     },
@@ -382,9 +416,13 @@ export function runPreFlightQualificationSuite(
   ];
 }
 
+export type ConsultationSource = "deterministic" | "llm" | "fallback";
+
 export interface TwinConsultationResult {
   engineUsed: string;
-  isLiveModelResponse: boolean;
+  source: ConsultationSource;
+  fallbackReason?: string;
+  deterministicGuardrail: string;
   summaryText: string;
   multipliers: OrganSensitivityMultipliers;
 }
@@ -403,24 +441,73 @@ function buildDeterministicConsultation(
     .join(", ");
 
   const contraindicated = quals.filter((q) => q.status === "contraindicated");
+  const caution = quals.filter((q) => q.status === "caution");
   const pharmaNote =
     contraindicated.length > 0
-      ? `CRITICAL PHARMACOGENOMIC GUARDRAIL: ${contraindicated[0].clinicalSummary}`
+      ? `CRITICAL GUARDRAIL: ${contraindicated[0].title} -> CONTRAINDICATED. ${contraindicated[0].clinicalSummary}`
+      : caution.length > 0
+      ? `CAUTION GUARDRAIL: ${caution.map((q) => q.title).join("; ")}. CYP2D6=${profile.pharmacogenomics.cyp2d6Phenotype}, CYP2C9=${profile.pharmacogenomics.cyp2c9Phenotype}, MTRR=${profile.pharmacogenomics.mtrrGenotype}.`
       : `PHARMACOGENOMICS: CYP2D6=${profile.pharmacogenomics.cyp2d6Phenotype}, CYP2C9=${profile.pharmacogenomics.cyp2c9Phenotype}, MTRR=${profile.pharmacogenomics.mtrrGenotype}.`;
+
+  const lowestQual = [...quals].sort(
+    (a, b) => a.predictedScore - b.predictedScore
+  )[0];
 
   return [
     `[${engineUsed}] Calibrated BioTwin Profile for ${profile.name} (${profile.callsign})`,
     `Top Organ Vulnerabilities: ${topRisks} | Active Mission Readiness: ${evaluation.readinessScore}/100 (${evaluation.overallStatus.toUpperCase()})`,
     pharmaNote,
-    `Blackout Autonomous Guidance: Prioritize ${quals.sort((a, b) => a.predictedScore - b.predictedScore)[0].recommendedInFlightCountermeasure}.`,
+    `Autonomous Guidance: Prioritize ${lowestQual.recommendedInFlightCountermeasure}.`,
   ].join("\n\n");
+}
+
+async function probeLocalEndpoint(
+  endpointUrl: string
+): Promise<{ reachable: boolean; reason?: string }> {
+  let parsed: URL;
+  try {
+    parsed = new URL(endpointUrl);
+  } catch {
+    return {
+      reachable: false,
+      reason: "Invalid local LLM URL (must be http:// or https://).",
+    };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return {
+      reachable: false,
+      reason: "Unsupported URL scheme for local LLM endpoint.",
+    };
+  }
+
+  // Probe Ollama /api/tags fast; non-Ollama servers (e.g. LM Studio :1234) return 404 on /api/tags and still pass.
+  const probeUrl = `${parsed.origin}/api/tags`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OLLAMA_PROBE_TIMEOUT_MS);
+  try {
+    await fetch(probeUrl, { method: "GET", signal: controller.signal });
+    return { reachable: true };
+  } catch (err) {
+    const isAbort = err instanceof Error && err.name === "AbortError";
+    return {
+      reachable: false,
+      reason: isAbort
+        ? `Local LLM endpoint timed out (${OLLAMA_PROBE_TIMEOUT_MS}ms probe on ${parsed.origin}).`
+        : `Local LLM unreachable or blocked by browser CORS at ${parsed.origin} (for Ollama, launch with OLLAMA_ORIGINS="*").`,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
  * Generates an autonomous clinical synthesis using either:
- * 1) Local Mechanistic Blackout Engine (100% offline deterministic PK/PD)
- * 2) Local On-Device LLM (Ollama / OpenAI-compatible localhost endpoint)
+ * 1) Local Mechanistic Blackout Engine (100% offline deterministic rule engine)
+ * 2) Local On-Device LLM (Ollama / LM Studio localhost endpoint with 30s timeout)
  * 3) Open API (/api/twin-simulate or user-supplied OpenAI-compatible API endpoint)
+ *
+ * Always computes and attaches `deterministicGuardrail` so advisory LLM text can
+ * never silently override deterministic pharmacogenomic contraindications.
  */
 export async function generateTwinConsultationSummary(
   profile: AstronautBiologicalProfile,
@@ -428,31 +515,62 @@ export async function generateTwinConsultationSummary(
   config: TwinInferenceConfig
 ): Promise<TwinConsultationResult> {
   const multipliers = computeOrganSensitivityMultipliers(profile);
+  const quals = runPreFlightQualificationSuite(profile);
+  const deterministicGuardrail = buildDeterministicConsultation(
+    profile,
+    evaluation,
+    multipliers,
+    "DETERMINISTIC CLINICAL GUARDRAILS"
+  );
 
   if (config.mode === "local_mechanistic") {
     return {
-      engineUsed: "LOCAL BLACKOUT PK/PD ENGINE (OFFLINE)",
-      isLiveModelResponse: true,
+      engineUsed: "LOCAL BLACKOUT RULE ENGINE (OFFLINE)",
+      source: "deterministic",
+      deterministicGuardrail,
       summaryText: buildDeterministicConsultation(
         profile,
         evaluation,
         multipliers,
-        "LOCAL BLACKOUT PK/PD"
+        "LOCAL BLACKOUT ENGINE"
       ),
       multipliers,
     };
   }
 
-  const prompt = `Summarize pre-flight BioTwin risks and countermeasure guardrails in 4 concise bullet points for astronaut ${profile.name} (${profile.callsign}):
+  const qualVerdicts = quals
+    .map((q) => `${q.title}: ${q.status.toUpperCase()} (${q.predictedScore}/100)`)
+    .join("; ");
+
+  const prompt = `Summarize pre-flight BioTwin risks and countermeasure guardrails in 4 concise bullet points for astronaut ${profile.name} (${profile.callsign}). Do not contradict any CONTRAINDICATED verdicts listed below:
 Biochemistry: Urinary Ca2+ ${profile.biochemical.urinaryCalciumMgDay} mg/d, Citrate ${profile.biochemical.urinaryCitrateMgDay} mg/d, CTX ${profile.biochemical.serumCtxPgMl} pg/mL, ALC ${profile.biochemical.baselineLymphocyteCount}/uL.
 Genomics: MTRR=${profile.pharmacogenomics.mtrrGenotype}, CYP2D6=${profile.pharmacogenomics.cyp2d6Phenotype}, CYP2C9=${profile.pharmacogenomics.cyp2c9Phenotype}, ATM=${profile.pharmacogenomics.atmDnaRepairScore}.
 Endurance: CO2 slope ${profile.endurance.co2ReactivitySlope}x, ONSD ${profile.endurance.baselineOnsdMm}mm, DEXA T-score ${profile.endurance.dexaBoneTScore}, Rad tolerance ${profile.endurance.radiationToleranceMsvDay} mSv/d.
-Sensitivity multipliers: ${JSON.stringify(multipliers)}. Readiness: ${evaluation.readinessScore}/100.`;
+Sensitivity multipliers: ${JSON.stringify(multipliers)}. Readiness: ${evaluation.readinessScore}/100.
+Deterministic Qualification Verdicts (authoritative): ${qualVerdicts}.`;
 
   if (config.mode === "local_ollama_llm") {
+    const probe = await probeLocalEndpoint(config.localEndpointUrl);
+    if (!probe.reachable) {
+      return {
+        engineUsed: "LOCAL LLM UNREACHABLE -> BLACKOUT FALLBACK",
+        source: "fallback",
+        fallbackReason: probe.reason,
+        deterministicGuardrail,
+        summaryText: buildDeterministicConsultation(
+          profile,
+          evaluation,
+          multipliers,
+          "OFFLINE FALLBACK ENGINE"
+        ),
+        multipliers,
+      };
+    }
+
+    let fallbackReason = "Local LLM returned an empty response.";
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), LOCAL_LLM_TIMEOUT_MS);
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3000);
       const res = await fetch(config.localEndpointUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -463,7 +581,7 @@ Sensitivity multipliers: ${JSON.stringify(multipliers)}. Readiness: ${evaluation
             {
               role: "system",
               content:
-                "You are an autonomous aerospace Chief Medical Officer clinical decision model running offline during a Mars communications blackout.",
+                "You are an advisory aerospace clinical decision model running offline during a Mars communications blackout. Always respect the authoritative contraindications given in the prompt.",
             },
             { role: "user", content: prompt },
           ],
@@ -471,7 +589,6 @@ Sensitivity multipliers: ${JSON.stringify(multipliers)}. Readiness: ${evaluation
           max_tokens: 260,
         }),
       });
-      clearTimeout(timeout);
       if (res.ok) {
         const data = (await res.json()) as {
           choices?: Array<{ message?: { content?: string } }>;
@@ -480,42 +597,57 @@ Sensitivity multipliers: ${JSON.stringify(multipliers)}. Readiness: ${evaluation
         if (content) {
           return {
             engineUsed: `LOCAL LLM (${config.localModelName || "ollama"})`,
-            isLiveModelResponse: true,
+            source: "llm",
+            deterministicGuardrail,
             summaryText: content,
             multipliers,
           };
         }
+      } else {
+        fallbackReason = `Local LLM returned HTTP ${res.status} (${res.statusText || "error"}).`;
       }
-    } catch {
-      // Fallback safely to deterministic blackout engine when Ollama is not running
+    } catch (err) {
+      fallbackReason =
+        err instanceof Error && err.name === "AbortError"
+          ? `Local LLM request timed out after ${LOCAL_LLM_TIMEOUT_MS / 1000}s.`
+          : "Local LLM connection failed during inference.";
+    } finally {
+      clearTimeout(timeout);
     }
 
     return {
-      engineUsed: "LOCAL LLM UNREACHABLE -> BLACKOUT PK/PD FALLBACK",
-      isLiveModelResponse: false,
+      engineUsed: "LOCAL LLM FAILED -> BLACKOUT FALLBACK",
+      source: "fallback",
+      fallbackReason,
+      deterministicGuardrail,
       summaryText: buildDeterministicConsultation(
         profile,
         evaluation,
         multipliers,
-        "OFFLINE FALLBACK PK/PD"
+        "OFFLINE FALLBACK ENGINE"
       ),
       multipliers,
     };
   }
 
-  // Open API mode (built-in /api/twin-simulate or external endpoint)
+  // Open API mode (built-in /api/twin-simulate OR direct browser call to external BYO OpenAI-compatible URL)
+  const targetUrl = config.openApiEndpointUrl?.trim() || "/api/twin-simulate";
+  const isBuiltIn = targetUrl.startsWith("/api/twin-simulate");
+  let openApiFallbackReason = "Open API endpoint unreachable.";
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OPEN_API_TIMEOUT_MS);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4500);
-    const targetUrl = config.openApiEndpointUrl?.trim() || "/api/twin-simulate";
-    const isBuiltIn = targetUrl.startsWith("/api/twin-simulate");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (!isBuiltIn && config.openApiKey.trim()) {
+      headers.Authorization = `Bearer ${config.openApiKey.trim()}`;
+    }
 
     const res = await fetch(targetUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(config.openApiKey ? { Authorization: `Bearer ${config.openApiKey}` } : {}),
-      },
+      headers,
       signal: controller.signal,
       body: JSON.stringify(
         isBuiltIn
@@ -525,12 +657,19 @@ Sensitivity multipliers: ${JSON.stringify(multipliers)}. Readiness: ${evaluation
             }
           : {
               model: "gpt-4o-mini",
-              messages: [{ role: "user", content: prompt }],
+              messages: [
+                {
+                  role: "system",
+                  content:
+                    "You are an advisory aerospace precision medicine assistant. Never override the authoritative contraindications in the prompt.",
+                },
+                { role: "user", content: prompt },
+              ],
               temperature: 0.2,
+              max_tokens: 260,
             }
       ),
     });
-    clearTimeout(timeout);
 
     if (res.ok) {
       const data = (await res.json()) as {
@@ -540,31 +679,41 @@ Sensitivity multipliers: ${JSON.stringify(multipliers)}. Readiness: ${evaluation
       const text =
         data?.summary ??
         data?.choices?.[0]?.message?.content?.trim() ??
-        buildDeterministicConsultation(
-          profile,
-          evaluation,
+        null;
+      if (text) {
+        return {
+          engineUsed: isBuiltIn
+            ? "OPEN REST API (/api/twin-simulate)"
+            : `BYO OPEN API (${targetUrl})`,
+          source: isBuiltIn ? "deterministic" : "llm",
+          deterministicGuardrail,
+          summaryText: text,
           multipliers,
-          `OPEN API (${targetUrl})`
-        );
-      return {
-        engineUsed: `OPEN API (${targetUrl})`,
-        isLiveModelResponse: true,
-        summaryText: text,
-        multipliers,
-      };
+        };
+      }
+      openApiFallbackReason = "Endpoint returned 200 OK without summary text.";
+    } else {
+      openApiFallbackReason = `Endpoint returned HTTP ${res.status}.`;
     }
-  } catch {
-    // Graceful fallback if external URL fails
+  } catch (err) {
+    openApiFallbackReason =
+      err instanceof Error && err.name === "AbortError"
+        ? `Open API request timed out after ${OPEN_API_TIMEOUT_MS / 1000}s.`
+        : "Open API request failed (network or CORS error).";
+  } finally {
+    clearTimeout(timeout);
   }
 
   return {
-    engineUsed: "OPEN API FALLBACK -> LOCAL PK/PD",
-    isLiveModelResponse: false,
+    engineUsed: "OPEN API FALLBACK -> LOCAL ENGINE",
+    source: "fallback",
+    fallbackReason: openApiFallbackReason,
+    deterministicGuardrail,
     summaryText: buildDeterministicConsultation(
       profile,
       evaluation,
       multipliers,
-      "OPEN API FALLBACK PK/PD"
+      "OPEN API FALLBACK ENGINE"
     ),
     multipliers,
   };

@@ -1166,7 +1166,9 @@ export function AutonomousCmoPanel({
                       >
                         <div className="flex flex-wrap items-center justify-between gap-1 font-mono text-[10px]">
                           <span className="font-semibold text-white tabular-nums">
-                            BioTwin Est. Efficacy: {prediction.efficacyPct}%
+                            {prediction.basis === "phenotype_scaling"
+                              ? "CYP Scaling Est."
+                              : "Rule-Based Est."} · {prediction.efficacyPct}%
                             {prediction.clearanceHalfLifeHours > 0
                               ? ` · t1/2 ${prediction.clearanceHalfLifeHours}h`
                               : ""}
@@ -1204,6 +1206,9 @@ export function AutonomousCmoPanel({
                         </div>
                         <p className="mt-1.5 font-medium text-white/90">
                           {prediction.recommendedDoseAdjustment}
+                        </p>
+                        <p className="mt-1 leading-snug text-[#a1a1aa]">
+                          {prediction.mechanisticRationale}
                         </p>
                         {prediction.contraindicationWarning && (
                           <p

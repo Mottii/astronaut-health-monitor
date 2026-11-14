@@ -56,6 +56,7 @@ import {
   toggleRoutineTask,
 } from "@/lib/routineStorage";
 import {
+  CREW_PROFILE_STORAGE_KEY,
   createDefaultCrewProfilesState,
   loadCrewProfilesState,
   saveCrewProfilesState,
@@ -67,7 +68,6 @@ import {
   clampVitalReadings,
   evaluateCrewHealth,
 } from "@/lib/triageEngine";
-import { simulatePersonalizedDrugResponse } from "@/lib/twinEngine";
 import type {
   BiometricSourceType,
   BodySystemId,
@@ -273,9 +273,9 @@ export default function HomePage() {
   const [crewStore, setCrewStore] = useState<CrewProfilesStorageState>(
     createDefaultCrewProfilesState
   );
-  const [crewHydrated, setCrewHydrated] = useState<boolean>(false);
   const [crewMenuOpen, setCrewMenuOpen] = useState<boolean>(false);
   const crewMenuRef = useRef<HTMLDivElement | null>(null);
+  const prevProfileIdRef = useRef<string>(crewStore.activeProfileId);
   const astroTickRef = useRef<number>(0);
 
   const refreshIssTelemetry = useCallback(async () => {
@@ -320,21 +320,65 @@ export default function HomePage() {
       setSurfaceMode("console");
     }
     setRoutineProgress(loadRoutineProgress());
-    setCrewStore(loadCrewProfilesState());
-    setCrewHydrated(true);
+    const loaded = loadCrewProfilesState();
+    setCrewStore(loaded);
+    prevProfileIdRef.current = loaded.activeProfileId;
     void refreshIssTelemetry();
   }, [refreshIssTelemetry]);
 
   useEffect(() => {
-    if (!crewHydrated) return;
-    saveCrewProfilesState(crewStore);
-  }, [crewStore, crewHydrated]);
+    const syncIfNewer = () => {
+      const incoming = loadCrewProfilesState();
+      setCrewStore((prev) => {
+        const shouldAdopt =
+          incoming.updatedAt > prev.updatedAt ||
+          (prev.updatedAt === 0 &&
+            incoming.updatedAt === 0 &&
+            incoming.activeProfileId !== prev.activeProfileId);
+        return shouldAdopt ? incoming : prev;
+      });
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === CREW_PROFILE_STORAGE_KEY || e.key === null) {
+        syncIfNewer();
+      }
+    };
+    window.addEventListener("focus", syncIfNewer);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("focus", syncIfNewer);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
+  const resetSessionInterventions = useCallback(() => {
+    setExecutedActions([]);
+    setCountermeasureVitalsPatch({});
+    setCountermeasureEnvPatch({});
+    setExamFindings({});
+  }, []);
 
   useEffect(() => {
-    const syncOnFocus = () => setCrewStore(loadCrewProfilesState());
-    window.addEventListener("focus", syncOnFocus);
-    return () => window.removeEventListener("focus", syncOnFocus);
-  }, []);
+    if (prevProfileIdRef.current !== crewStore.activeProfileId) {
+      prevProfileIdRef.current = crewStore.activeProfileId;
+      resetSessionInterventions();
+    }
+  }, [crewStore.activeProfileId, resetSessionInterventions]);
+
+  function handleSelectCrewProfile(profileId: string) {
+    setCrewStore((prev) => {
+      const next: CrewProfilesStorageState = {
+        ...prev,
+        activeProfileId: profileId,
+        updatedAt: Date.now(),
+      };
+      saveCrewProfilesState(next);
+      return next;
+    });
+    prevProfileIdRef.current = profileId;
+    resetSessionInterventions();
+    setCrewMenuOpen(false);
+  }
 
   useEffect(() => {
     if (telemetryMode === "preset") return;
@@ -419,9 +463,17 @@ export default function HomePage() {
   const vitals = multiplexed.vitals;
   const envTelemetry = multiplexed.envTelemetry;
 
+  const activeDrugIds = useMemo(
+    () => executedActions.map((a) => a.actionId),
+    [executedActions]
+  );
+
   const evaluation = useMemo(
-    () => evaluateCrewHealth(vitals, envTelemetry, envId, activeCrewProfile),
-    [vitals, envTelemetry, envId, activeCrewProfile]
+    () =>
+      evaluateCrewHealth(vitals, envTelemetry, envId, activeCrewProfile, {
+        activeDrugIds,
+      }),
+    [vitals, envTelemetry, envId, activeCrewProfile, activeDrugIds]
   );
 
   const envConfig = MISSION_ENVIRONMENTS[envId];
@@ -462,6 +514,13 @@ export default function HomePage() {
   }
 
   function handleUpdateVitals(patch: Partial<VitalReadings>) {
+    setCountermeasureVitalsPatch((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(patch) as Array<keyof VitalReadings>) {
+        delete next[k];
+      }
+      return next;
+    });
     if (telemetryMode === "preset") {
       setActiveScenarioId("custom");
       setPresetVitals((prev) => clampVitalReadings({ ...prev, ...patch }));
@@ -471,6 +530,13 @@ export default function HomePage() {
   }
 
   function handleUpdateEnvTelemetry(patch: Partial<EnvironmentTelemetry>) {
+    setCountermeasureEnvPatch((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(patch) as Array<keyof EnvironmentTelemetry>) {
+        delete next[k];
+      }
+      return next;
+    });
     if (telemetryMode === "preset") {
       setActiveScenarioId("custom");
       setPresetEnv((prev) => ({ ...prev, ...patch }));
@@ -507,36 +573,31 @@ export default function HomePage() {
   }
 
   function handleExecuteCountermeasure(action: CountermeasureActionSpec) {
-    if (telemetryMode === "preset") {
-      const next = applyCountermeasureToState(
-        vitals,
-        envTelemetry,
-        action,
-        activeCrewProfile
-      );
-      setActiveScenarioId("custom");
-      setPresetVitals(next.vitals);
-      setPresetEnv(next.envTelemetry);
-    } else {
-      const drugPred = simulatePersonalizedDrugResponse(
-        activeCrewProfile,
-        action,
-        vitals,
-        envTelemetry
-      );
-      if (action.vitalsPatch || drugPred.secondarySystemImpact?.vitalsPatch) {
-        setCountermeasureVitalsPatch((prev) => ({
-          ...prev,
-          ...(action.vitalsPatch ?? {}),
-          ...(drugPred.secondarySystemImpact?.vitalsPatch ?? {}),
-        }));
+    const next = applyCountermeasureToState(
+      vitals,
+      envTelemetry,
+      action,
+      activeCrewProfile
+    );
+    const vitalsDiff: Partial<VitalReadings> = {};
+    for (const key of Object.keys(next.vitals) as Array<keyof VitalReadings>) {
+      if (next.vitals[key] !== vitals[key]) {
+        (vitalsDiff as Record<string, unknown>)[key] = next.vitals[key];
       }
-      if (action.envPatch) {
-        setCountermeasureEnvPatch((prev) => ({
-          ...prev,
-          ...action.envPatch,
-        }));
+    }
+    const envDiff: Partial<EnvironmentTelemetry> = {};
+    for (const key of Object.keys(next.envTelemetry) as Array<
+      keyof EnvironmentTelemetry
+    >) {
+      if (next.envTelemetry[key] !== envTelemetry[key]) {
+        (envDiff as Record<string, unknown>)[key] = next.envTelemetry[key];
       }
+    }
+    if (Object.keys(vitalsDiff).length > 0) {
+      setCountermeasureVitalsPatch((prev) => ({ ...prev, ...vitalsDiff }));
+    }
+    if (Object.keys(envDiff).length > 0) {
+      setCountermeasureEnvPatch((prev) => ({ ...prev, ...envDiff }));
     }
 
     const now = new Date();
@@ -933,13 +994,7 @@ export default function HomePage() {
                           role="menuitemradio"
                           aria-checked={isActive}
                           data-testid={`crew-persona-${profile.id}`}
-                          onClick={() => {
-                            setCrewStore((prev) => ({
-                              ...prev,
-                              activeProfileId: profile.id,
-                            }));
-                            setCrewMenuOpen(false);
-                          }}
+                          onClick={() => handleSelectCrewProfile(profile.id)}
                           className={`flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-left transition ${
                             isActive
                               ? "bg-white/[0.09] text-white"
@@ -1257,6 +1312,9 @@ export default function HomePage() {
             );
           })}
         </div>
+        <p className="mt-1 text-center font-mono text-[9.5px] text-[#52525b]">
+          ARES-TWIN/1.0 · Synthetic demonstration profiles — educational simulation, not medical advice.
+        </p>
       </footer>
 
       {/* Non-Blocking Right Slide-Over Drawers */}
