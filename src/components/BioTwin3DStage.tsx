@@ -46,6 +46,8 @@ export interface BioTwin3DStageProps {
   allowWheelZoom?: boolean;
   /** Hide bottom-left surgical raycast card (used when PresentationView draws its own corner HUD) */
   hideBottomHud?: boolean;
+  /** Control which 3D organ callout pills are visible */
+  calloutFilter?: "all" | "selected" | "none";
 }
 
 interface ParsedSubStructure {
@@ -487,6 +489,7 @@ export function BioTwin3DStage({
   enableParallax = true,
   allowWheelZoom = true,
   hideBottomHud = false,
+  calloutFilter = "all",
 }: BioTwin3DStageProps) {
   const effectiveMode: ClinicalVisualMode =
     visualMode ?? (xrayIntensity === "deep" ? "xray" : "atlas");
@@ -542,6 +545,8 @@ export function BioTwin3DStage({
   const controlsRef = useRef<OrbitControls | null>(null);
   const enableParallaxRef = useRef(enableParallax);
   enableParallaxRef.current = enableParallax;
+  const calloutFilterRef = useRef(calloutFilter);
+  calloutFilterRef.current = calloutFilter;
 
   useEffect(() => {
     setClickedInfo((prev) =>
@@ -1609,6 +1614,15 @@ export function BioTwin3DStage({
       for (const sysId of SYSTEM_ORDER) {
         const pillEl = pillRefs.current[sysId];
         if (!pillEl) continue;
+        const filterMode = calloutFilterRef.current;
+        if (
+          filterMode === "none" ||
+          (filterMode === "selected" && sysId !== snapshot.selectedSystem)
+        ) {
+          pillEl.style.opacity = "0";
+          pillEl.style.pointerEvents = "none";
+          continue;
+        }
         projectedVec.copy(ORGAN_ANCHORS[sysId]).project(camera);
         if (
           projectedVec.z > 1 ||

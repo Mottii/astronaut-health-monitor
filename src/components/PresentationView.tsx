@@ -4,16 +4,12 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
-  ChevronRight,
+  ArrowUpRight,
   RefreshCw,
-  SlidersHorizontal,
   Volume2,
   VolumeX,
 } from "lucide-react";
-import {
-  BioTwin3DStage,
-  type ClinicalVisualMode,
-} from "@/components/BioTwin3DStage";
+import { BioTwin3DStage } from "@/components/BioTwin3DStage";
 import { PRESENTATION_SLIDES } from "@/data/presentationSlides";
 import type { SpaceWeatherStatus } from "@/lib/nasaApi";
 import { soundEngine } from "@/lib/soundEngine";
@@ -86,21 +82,12 @@ export function PresentationView({
   spaceWeather,
 }: PresentationViewProps) {
   const slide = PRESENTATION_SLIDES[slideIndex] ?? PRESENTATION_SLIDES[0];
-  const [visualOverride, setVisualOverride] =
-    useState<ClinicalVisualMode | null>(null);
   const [soundOn, setSoundOn] = useState<boolean>(() => soundEngine.isEnabled());
   const [introOpen, setIntroOpen] = useState<boolean>(true);
   const [cameraResetToken, setCameraResetToken] = useState<number>(0);
 
   const lastWheelAtRef = useRef<number>(0);
   const scrambledTitle = useScrambleText(slide.title);
-
-  // Clear manual shader override whenever slide changes
-  useEffect(() => {
-    setVisualOverride(null);
-  }, [slideIndex]);
-
-  const activeVisualMode = visualOverride ?? slide.visualMode;
 
   function goToSlide(nextIdx: number) {
     const clamped = Math.max(
@@ -193,13 +180,6 @@ export function PresentationView({
     }
   }
 
-  const statusColor =
-    evaluation.overallStatus === "red"
-      ? "bg-rose-400"
-      : evaluation.overallStatus === "amber"
-        ? "bg-amber-400"
-        : "bg-emerald-400";
-
   return (
     <div
       onWheel={handleWheel}
@@ -214,13 +194,14 @@ export function PresentationView({
           onSelectSystem={onSelectSystem}
           vitals={vitals}
           envTelemetry={envTelemetry}
-          visualMode={activeVisualMode}
+          visualMode={slide.visualMode}
           autoRotate={slide.autoRotate}
           cameraResetToken={cameraResetToken}
           cameraPreset={introOpen ? "full" : slide.cameraPreset}
           enableParallax={true}
           allowWheelZoom={false}
           hideBottomHud={true}
+          calloutFilter={slideIndex === 0 ? "none" : "selected"}
         />
       </div>
 
@@ -267,59 +248,18 @@ export function PresentationView({
           </span>
         </button>
 
-        {/* Top-Right Shader Switcher + Readiness + Console Toggle */}
-        <div className="pointer-events-auto flex items-center gap-2 sm:gap-3">
-          <div
-            role="group"
-            aria-label="3D Visualization Shader"
-            className="hidden items-center rounded-full border border-white/10 bg-[#0d0e11]/70 p-0.5 backdrop-blur-md md:inline-flex"
-          >
-            {(
-              [
-                ["atlas", "ATLAS"],
-                ["xray", "X-RAY"],
-                ["vascular", "VASCULAR"],
-              ] as const
-            ).map(([mode, label]) => {
-              const active = activeVisualMode === mode;
-              return (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => {
-                    soundEngine.playHoverTick();
-                    setVisualOverride(mode);
-                  }}
-                  className={`cursor-pointer rounded-full px-3 py-1 font-mono text-[10px] tracking-[0.12em] transition ${
-                    active
-                      ? "bg-white text-[#06070a]"
-                      : "text-white/55 hover:text-white"
-                  }`}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-[#0d0e11]/70 px-3 py-1.5 font-mono text-[10px] tracking-[0.12em] backdrop-blur-md sm:inline-flex">
-            <span className={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
-            <span className="text-white/60">READINESS</span>
-            <span className="font-semibold text-white">
-              {evaluation.readinessScore}/100
-            </span>
-          </div>
-
+        {/* Top-Right Single Console Action (Matched to CTA Glassmorphism) */}
+        <div className="pointer-events-auto flex items-center">
           <button
             type="button"
             onClick={() => {
               soundEngine.playHoverTick();
               onOpenConsole();
             }}
-            className="inline-flex cursor-pointer items-center gap-2 rounded border border-white/20 bg-white/10 px-3.5 py-1.5 font-mono text-[10px] font-semibold tracking-[0.16em] text-white backdrop-blur-md transition hover:border-white/40 hover:bg-white hover:text-[#06070a]"
+            className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-white/25 bg-white/10 px-4 font-mono text-[10px] font-semibold tracking-[0.18em] text-white backdrop-blur-md transition hover:border-white hover:bg-white hover:text-[#06070a]"
           >
-            <SlidersHorizontal className="h-3 w-3" aria-hidden="true" />
             <span>CMO CONSOLE</span>
+            <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
         </div>
       </header>
@@ -361,93 +301,83 @@ export function PresentationView({
         })}
       </nav>
 
-      {/* Right Compact HUD: Earth vs. Spaceflight Metrics (28px margin, lightweight glass) */}
-      <aside
-        aria-label="Slide Telemetry Comparison"
-        className="pointer-events-auto absolute top-1/2 right-5 z-30 hidden w-[260px] -translate-y-1/2 flex-col gap-2.5 sm:right-7 lg:flex"
-      >
-        <div className="flex items-center justify-between font-mono text-[9.5px] tracking-[0.18em] text-white/45">
-          <span>EARTH VS SPACE</span>
-          <span>{slide.chapterCode}/06</span>
-        </div>
-
-        {slide.metrics.map((metric) => (
-          <div
-            key={metric.label}
-            className="rounded-xl border border-white/12 bg-[#060a12]/42 p-3.5 backdrop-blur-md"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-[10px] tracking-[0.08em] text-white/65">
-                {metric.label}
-              </span>
-              {metric.critical && (
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shadow-[0_0_8px_#fbbf24]" />
-              )}
-            </div>
-
-            <div className="mt-2.5 grid grid-cols-2 gap-2 border-t border-white/[0.07] pt-2">
-              <div>
-                <span className="block font-mono text-[9px] uppercase tracking-wider text-white/40">
-                  Earth 1g
-                </span>
-                <span className="mt-0.5 block font-mono text-xs text-white/70">
-                  {metric.earthValue}
-                </span>
-              </div>
-              <div>
-                <span className="block font-mono text-[9px] uppercase tracking-wider text-sky-300/80">
-                  Spaceflight
-                </span>
-                <span
-                  className={`mt-0.5 block font-mono text-xs font-semibold ${
-                    metric.critical ? "text-amber-300" : "text-sky-300"
-                  }`}
-                >
-                  {metric.spaceValue}
-                </span>
-              </div>
-            </div>
-
-            <span className="mt-1.5 block font-mono text-[9px] text-white/35">
-              Unit: {metric.unit}
-            </span>
+      {/* Right Compact HUD: Earth vs. Spaceflight Metrics (hidden on Slide 01 cover, clean glass cards on 02-06) */}
+      {slideIndex > 0 && (
+        <aside
+          aria-label="Slide Telemetry Comparison"
+          className="pointer-events-auto absolute top-1/2 right-5 z-30 hidden w-[268px] -translate-y-1/2 flex-col gap-2.5 sm:right-7 lg:flex"
+        >
+          <div className="flex items-center justify-between font-mono text-[9.5px] tracking-[0.18em] text-white/45">
+            <span>EARTH VS SPACE</span>
+            <span className="text-white/35">{slide.osdrRefs[0] ?? "NASA HRP"}</span>
           </div>
-        ))}
 
-        {/* Study Citations + Live DONKI Trigger on Radiation Slide */}
-        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-          {slide.osdrRefs.map((ref) => (
-            <span
-              key={ref}
-              className="rounded border border-white/10 bg-white/[0.04] px-2 py-0.5 font-mono text-[9.5px] text-white/55"
+          {slide.metrics.map((metric) => (
+            <div
+              key={metric.label}
+              className="rounded-xl border border-white/12 bg-[#060a12]/48 p-3.5 backdrop-blur-md"
             >
-              {ref}
-            </span>
-          ))}
-        </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono text-[10px] tracking-[0.08em] text-white/70">
+                  {metric.label}
+                </span>
+                {metric.critical && (
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shadow-[0_0_8px_#fbbf24]" />
+                )}
+              </div>
 
-        {slide.id === "radiation-immune" && (
-          <button
-            type="button"
-            onClick={() => {
-              soundEngine.playHoverTick();
-              onSyncSpaceWeather();
-            }}
-            disabled={isSyncingWeather}
-            className="mt-1 inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-sky-400/30 bg-sky-400/10 px-3 py-2 font-mono text-[10px] font-medium tracking-[0.14em] text-sky-200 backdrop-blur-md transition hover:border-sky-400/60 hover:bg-sky-400/20 disabled:opacity-60"
-          >
-            <RefreshCw
-              className={`h-3 w-3 ${isSyncingWeather ? "animate-spin" : ""}`}
-              aria-hidden="true"
-            />
-            {isSyncingWeather
-              ? "SYNCING NASA DONKI..."
-              : spaceWeather
-                ? `DONKI: ${spaceWeather.summary}`
-                : "SYNC LIVE NASA DONKI"}
-          </button>
-        )}
-      </aside>
+              <div className="mt-2.5 grid grid-cols-2 gap-2 border-t border-white/[0.07] pt-2.5">
+                <div>
+                  <span className="block font-mono text-[9px] uppercase tracking-wider text-white/40">
+                    Earth 1g
+                  </span>
+                  <span className="mt-0.5 block font-mono text-sm font-medium text-white/75">
+                    {metric.earthValue}
+                  </span>
+                </div>
+                <div>
+                  <span className="block font-mono text-[9px] uppercase tracking-wider text-sky-300/80">
+                    Spaceflight
+                  </span>
+                  <span
+                    className={`mt-0.5 block font-mono text-sm font-semibold ${
+                      metric.critical ? "text-amber-300" : "text-sky-300"
+                    }`}
+                  >
+                    {metric.spaceValue}
+                  </span>
+                </div>
+              </div>
+
+              <span className="mt-1.5 block font-mono text-[9px] text-white/35">
+                Unit: {metric.unit}
+              </span>
+            </div>
+          ))}
+
+          {slide.id === "radiation-immune" && (
+            <button
+              type="button"
+              onClick={() => {
+                soundEngine.playHoverTick();
+                onSyncSpaceWeather();
+              }}
+              disabled={isSyncingWeather}
+              className="mt-1 inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-sky-400/30 bg-sky-400/10 px-3 py-2 font-mono text-[10px] font-medium tracking-[0.14em] text-sky-200 backdrop-blur-md transition hover:border-sky-400/60 hover:bg-sky-400/20 disabled:opacity-60"
+            >
+              <RefreshCw
+                className={`h-3 w-3 ${isSyncingWeather ? "animate-spin" : ""}`}
+                aria-hidden="true"
+              />
+              {isSyncingWeather
+                ? "SYNCING NASA DONKI..."
+                : spaceWeather
+                  ? `DONKI: ${spaceWeather.summary}`
+                  : "SYNC LIVE NASA DONKI"}
+            </button>
+          )}
+        </aside>
+      )}
 
       {/* Bottom Center Slide Headline & CTA (Hubtown Hero Placement) */}
       <section className="pointer-events-none absolute inset-x-0 bottom-14 z-30 mx-auto flex max-w-2xl flex-col items-center px-5 text-center sm:bottom-12">
@@ -502,12 +432,12 @@ export function PresentationView({
         </div>
       </section>
 
-      {/* Bottom Corner Controls (28px unified HUD margin) */}
+      {/* Bottom Corner Controls (shifted past Next.js dev badge on bottom-left; minimal counter on bottom-right) */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex items-center justify-between px-5 py-5 sm:px-7 sm:py-7">
         <button
           type="button"
           onClick={handleToggleSound}
-          className="pointer-events-auto inline-flex cursor-pointer items-center gap-2 font-mono text-[10px] tracking-[0.18em] text-white/60 transition hover:text-white"
+          className="pointer-events-auto ml-12 inline-flex cursor-pointer items-center gap-2 rounded-lg border border-white/15 bg-white/[0.06] px-3 py-1.5 font-mono text-[10px] tracking-[0.18em] text-white/75 backdrop-blur-md transition hover:border-white/35 hover:text-white sm:ml-14"
         >
           {soundOn ? (
             <Volume2 className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
@@ -517,22 +447,9 @@ export function PresentationView({
           <span>{soundOn ? "SOUND ON" : "SOUND OFF"}</span>
         </button>
 
-        <div className="pointer-events-auto flex items-center gap-4">
-          <span className="hidden font-mono text-[10px] tracking-[0.16em] text-white/35 sm:inline">
-            SCROLL OR ← → TO NAVIGATE
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              soundEngine.playHoverTick();
-              onOpenConsole();
-            }}
-            className="inline-flex cursor-pointer items-center gap-1.5 font-mono text-[10px] tracking-[0.18em] text-white/60 transition hover:text-white"
-          >
-            <span>FULL TELEMETRY</span>
-            <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-        </div>
+        <span className="font-mono text-[10px] tracking-[0.22em] text-white/55">
+          {slide.chapterCode} / 06
+        </span>
       </div>
 
       {/* Intro Portal Gate (Active Theory Style) */}
