@@ -860,6 +860,7 @@ export function BioTwin3DStage({
     const skeletonMaterial = new THREE.ShaderMaterial({
       uniforms: {
         uOpacityScale: { value: 1.0 },
+        uBoneFocus: { value: 0.0 },
       },
       vertexShader: `
         varying vec3 vNormalW;
@@ -873,13 +874,16 @@ export function BioTwin3DStage({
       `,
       fragmentShader: `
         uniform float uOpacityScale;
+        uniform float uBoneFocus;
         varying vec3 vNormalW;
         varying vec3 vViewDir;
         void main() {
           float ndotv = clamp(abs(dot(normalize(vNormalW), normalize(vViewDir))), 0.0, 1.0);
           float rim = pow(1.0 - ndotv, 2.0);
-          vec3 col = mix(vec3(0.35, 0.45, 0.58), vec3(0.75, 0.86, 0.96), rim);
-          float alpha = mix(0.025, 0.42, rim) * uOpacityScale;
+          vec3 baseCol = mix(vec3(0.35, 0.45, 0.58), vec3(0.75, 0.86, 0.96), rim);
+          vec3 focusCol = mix(vec3(0.30, 0.55, 0.72), vec3(0.56, 0.88, 1.0), rim);
+          vec3 col = mix(baseCol, focusCol, uBoneFocus * 0.65);
+          float alpha = mix(0.025, 0.42 + uBoneFocus * 0.14, rim) * uOpacityScale;
           gl_FragColor = vec4(col, alpha);
         }
       `,
@@ -1120,6 +1124,16 @@ export function BioTwin3DStage({
           if (!parsed) continue;
 
           const sysId = parsed.systemId;
+          if (parsed.tissueTag === "Bone") {
+            // Unify pelvis, femurs, and knees with Skeletal_Frame X-ray Fresnel shader
+            obj.material = skeletonMaterial;
+            obj.userData = { systemId: sysId, parsed };
+            obj.renderOrder = 2;
+            scene.add(obj);
+            organPickTargets.push(obj);
+            continue;
+          }
+
           const isShell = parsed.layer === "Shell";
           const baseHex = TISSUE_COLOR_HEX[parsed.tissueTag] ?? SYSTEM_BASE_HEX[sysId];
           const baseColor = new THREE.Color(baseHex);
@@ -1358,6 +1372,9 @@ export function BioTwin3DStage({
           : effectiveMode === "vascular"
             ? 0.45
             : 0.95;
+      const boneFocused = snapshot.selectedSystem === "musculoskeletal_renal" ? 1.0 : 0.0;
+      skeletonMaterial.uniforms.uBoneFocus.value +=
+        (boneFocused - skeletonMaterial.uniforms.uBoneFocus.value) * 0.12;
       shellMaterial.uniforms.uFocusPos.value.lerp(
         ORGAN_ANCHORS[snapshot.selectedSystem],
         0.15
