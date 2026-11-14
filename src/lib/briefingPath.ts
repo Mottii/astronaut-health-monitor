@@ -1,33 +1,46 @@
 import * as THREE from "three";
 import type { BodySystemId } from "@/types/health";
 
-// One continuous path through the existing seven chapters. No per-chapter reset.
+// A closed path: the metabolic chapter leads directly back into the title.
 const positions = [
-  [0.34, 0.10, 2.98], [0.30, 0.86, 1.12], [-0.30, 0.53, 1.40],
-  [0.46, 0.34, 1.65], [-0.34, 0.59, 1.7], [0.30, 0.39, 1.4], [0.34, 0.10, 2.98],
+  [0.33, 0.10, 2.86], [0.24, 0.48, 1.92], [0.30, 0.86, 1.12], [-0.30, 0.53, 1.40],
+  [0.46, 0.34, 1.65], [-0.34, 0.59, 1.7], [0.30, 0.39, 1.4],
 ];
 const targets = [
-  [0, 0, 0], [0, 0.77, 0.01], [0.01, 0.43, 0.02],
-  [0, 0.22, 0], [0, 0.44, 0], [-0.02, 0.31, 0.01], [0, 0, 0],
+  [0, 0, 0], [0, 0.42, 0], [0, 0.77, 0.01], [0.01, 0.43, 0.02],
+  [0, 0.22, 0], [0, 0.44, 0], [-0.02, 0.31, 0.01],
 ];
-const positionPath = new THREE.CatmullRomCurve3(positions.map((p) => new THREE.Vector3(p[0], p[1], p[2])), false, "catmullrom", 0.32);
-const targetPath = new THREE.CatmullRomCurve3(targets.map((p) => new THREE.Vector3(p[0], p[1], p[2])), false, "catmullrom", 0.32);
+const positionPath = new THREE.CatmullRomCurve3(positions.map((p) => new THREE.Vector3(p[0], p[1], p[2])), true, "catmullrom", 0.32);
+const targetPath = new THREE.CatmullRomCurve3(targets.map((p) => new THREE.Vector3(p[0], p[1], p[2])), true, "catmullrom", 0.32);
 
 export const STORY_SYSTEMS: Array<BodySystemId | null> = [
-  null, "neuro_ocular", "cardiovascular", "musculoskeletal_renal",
-  "immune_hematology", "metabolic_endocrine", null,
+  null, null, "neuro_ocular", "cardiovascular", "musculoskeletal_renal",
+  "immune_hematology", "metabolic_endocrine",
 ];
 
+export const STORY_CHAPTER_COUNT = STORY_SYSTEMS.length;
+
+export function wrapStoryProgress(progress: number): number {
+  const wrapped = progress % STORY_CHAPTER_COUNT;
+  return wrapped < 0 ? wrapped + STORY_CHAPTER_COUNT : wrapped === 0 ? 0 : wrapped;
+}
+
+export function storyScrollTarget(current: number, requested: number): number {
+  if (current === STORY_CHAPTER_COUNT - 1 && requested === 0) return STORY_CHAPTER_COUNT;
+  if (current === 0 && requested === STORY_CHAPTER_COUNT - 1) return -1;
+  return Math.max(-1, Math.min(STORY_CHAPTER_COUNT, requested));
+}
+
 export function sampleBriefingPose(progress: number, position: THREE.Vector3, target: THREE.Vector3): void {
-  const t = Math.max(0, Math.min(6, progress)) / 6;
+  const t = wrapStoryProgress(progress) / STORY_CHAPTER_COUNT;
   positionPath.getPoint(t, position);
   targetPath.getPoint(t, target);
 }
 
 export function storyFocus(progress: number): { overview: number; systems: Record<BodySystemId, number> } {
-  const p = Math.max(0, Math.min(6, progress));
+  const p = wrapStoryProgress(progress);
   const left = Math.floor(p);
-  const right = Math.min(6, left + 1);
+  const right = (left + 1) % STORY_CHAPTER_COUNT;
   const fraction = p - left;
   const blend = fraction * fraction * (3 - 2 * fraction);
   const systems: Record<BodySystemId, number> = {

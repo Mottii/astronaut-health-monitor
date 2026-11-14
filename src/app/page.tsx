@@ -809,7 +809,7 @@ export default function HomePage() {
     activeCrewProfile.callsign;
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#06070a] text-white lg:h-dvh lg:overflow-hidden">
+    <div className="ares-console-enter flex min-h-screen flex-col bg-[#06070a] text-white lg:h-dvh lg:overflow-hidden">
       {/* ZONE A: Deep-Space Glassmorphic Top Command Bar */}
       <header className="shrink-0 border-b border-white/[0.08] bg-[#070b14]/90 px-3 py-1.5 backdrop-blur-md lg:px-4">
         <div className="flex flex-wrap items-center justify-between gap-2">

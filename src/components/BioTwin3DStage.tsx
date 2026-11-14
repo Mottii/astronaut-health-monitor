@@ -12,7 +12,8 @@ import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { BODY_SYSTEM_METADATA } from "@/data/nasaHrpData";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { BRIEFING_TRANSITION_MS, cameraArc, easeInOutCubic } from "@/lib/presentationMotion";
-import { sampleBriefingPose, storyFocus } from "@/lib/briefingPath";
+import { sampleBriefingPose, storyFocus, STORY_CHAPTER_COUNT } from "@/lib/briefingPath";
+import { createConstellationField } from "@/lib/constellationField";
 import {
   buildShellEnvelope,
   containGeometryInsideShell,
@@ -77,6 +78,8 @@ export interface BioTwin3DStageProps {
   reducedMotionOverride?: boolean;
   storyProgress?: { current: number };
   modelRotation?: { current: number };
+  /** Dissolves the anatomy (e.g. on the title page) while keeping the cosmic backdrop. */
+  bodyHidden?: boolean;
 }
 
 interface ParsedSubStructure {
@@ -154,12 +157,12 @@ const TISSUE_COLOR_HEX: Record<string, string> = {
 function resolveStructureColorHex(parsed: ParsedSubStructure): string {
   const label = parsed.structureLabel;
   if (parsed.systemId === "metabolic_endocrine") {
-    if (label.includes("Small Intestine")) return "#ca8048";      // warm coral-peach small bowel
-    if (label.includes("Large Intestine")) return "#5d9c4e";      // distinct sage-olive colon
-    if (label.includes("Pancreas")) return "#ce9c32";             // amber-gold pancreas
-    if (label.includes("Caudate")) return "#c95842";              // copper-red caudate/porta
-    if (label.includes("Parenchyma")) return "#9f3e2d";           // deep mahogany liver lobes
-    if (label.includes("Ligament")) return "#d6c38b";             // pale gold hepatic ligaments
+    if (label.includes("Small Intestine")) return "#cd9379";      // warm coral-peach small bowel
+    if (label.includes("Large Intestine")) return "#aa706b";      // darker dusty-rose colon
+    if (label.includes("Pancreas")) return "#d8b39b";             // lighter peach pancreas
+    if (label.includes("Caudate")) return "#ac6652";              // copper-red caudate/porta
+    if (label.includes("Parenchyma")) return "#914d43";           // deep mahogany liver lobes
+    if (label.includes("Ligament")) return "#bda38f";             // muted sand hepatic ligaments
   }
   return TISSUE_COLOR_HEX[parsed.tissueTag] ?? SYSTEM_BASE_HEX[parsed.systemId];
 }
@@ -320,13 +323,13 @@ const FRESNEL_FRAGMENT_SHADER = `
     vec3 obsidianBase = vec3(0.025, 0.032, 0.048);
     vec3 cyanRim = vec3(0.28, 0.78, 0.98);
     vec3 silverRim = vec3(0.88, 0.94, 1.0);
-    vec3 rimCol = mix(cyanRim, silverRim, fresnel);
+    vec3 rimCol = mix(cyanRim, silverRim, smoothstep(0.12, 0.8, fresnel));
     vec3 col = mix(obsidianBase, rimCol, fresnel * 0.92);
     col += uAccentColor * (sweep * 0.28 + transSweep * 0.85 + windowRim + (1.0 - focusWindow) * fresnel * 0.22);
     col += rimCol * holoGrid * (0.28 + fresnel * 0.6);
     col += vec3(0.05, 0.09, 0.14) * scanline * fresnel;
 
-    float baseAlpha = mix(0.008, 0.14, fresnel) + holoGrid * 0.06;
+    float baseAlpha = mix(0.008, 0.22, fresnel) + holoGrid * 0.06;
     float hoverWindow = (1.0 - smoothstep(0.10, 0.23, distance(vWorldPos, uHoverPoint))) * uHoverStrength;
     float cutoutAlpha = mix(0.22, 1.0, focusWindow) * (1.0 - hoverWindow * 0.85);
     float depthFactor = mix(1.0, 0.38, uXrayDeep);
@@ -348,24 +351,41 @@ const NEBULA_FRAGMENT_SHADER = `
   uniform float uTime;
   uniform vec3 uAccentColor;
   varying vec3 vDir;
-  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float hash(vec2 p) {
+    p = fract(p * vec2(0.1031, 0.11369));
+    p += dot(p, p.yx + 19.19);
+    return fract(p.x * p.y);
+  }
+  float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f*f*(3.0-2.0*f);
+    return mix(mix(hash(i), hash(i+vec2(1.0,0.0)), f.x), mix(hash(i+vec2(0.0,1.0)), hash(i+vec2(1.0)), f.x), f.y);
+  }
+  float mist(vec2 p) {
+    float value = 0.0, amplitude = 0.55;
+    mat2 rotation = mat2(0.8,-0.6,0.6,0.8);
+    for (int i = 0; i < 3; i++) {
+      value += noise(p) * amplitude;
+      p = rotation * p * 2.08 + 3.1;
+      amplitude *= 0.48;
+    }
+    return value;
+  }
   void main() {
     vec3 n = normalize(vDir);
-    vec2 uv = vec2(atan(n.z, n.x) / 6.2831853 + 0.5, asin(n.y) / 3.1415926 + 0.5);
-    float cloud = sin(n.x * 5.0 + uTime * 0.06) * cos(n.y * 4.0 - uTime * 0.04);
-    float halo = exp(-pow(n.x * 2.8, 2.0) - pow((n.y + 0.05) * 3.0, 2.0));
-    vec3 col = vec3(0.008, 0.011, 0.017) + vec3(0.014, 0.028, 0.045) * halo * (0.8 + cloud * 0.2);
-    // Circular, subpixel stars instead of bright square cells on the dome.
-    vec2 grid = uv * vec2(240.0, 120.0);
-    vec2 id = floor(grid);
-    vec2 center = vec2(hash(id), hash(id + 47.3)) * 0.6 + 0.2;
-    float d = length(fract(grid) - center);
-    float star = (1.0 - smoothstep(0.015, 0.08, d)) * step(0.985, hash(id + 19.0));
-    float band = exp(-pow((n.y - n.x * 0.32 + 0.15) * 5.0, 2.0));
-    float wisps = 0.5 + 0.25*sin(n.x*19.0+n.z*11.0+uTime*0.025) + 0.15*sin(n.y*37.0-n.x*23.0);
-    col += mix(vec3(0.012,0.014,0.025),vec3(0.019,0.032,0.041),wisps) * band * wisps;
-    col += vec3(0.30, 0.40, 0.47) * star * (0.65 + 0.2 * sin(uTime * 0.7 + hash(id) * 20.0));
-    gl_FragColor = vec4(col, 1.0);
+    vec2 p = vec2(n.x*3.2, n.y*2.6);
+    vec2 drift = vec2(uTime*0.006, -uTime*0.003);
+    vec2 warp = vec2(mist(p+drift), mist(p*1.13-drift+7.4));
+    float clouds = mist(p*2.0 + warp*2.4 + drift);
+    float broadBand = exp(-pow((n.y + 0.10 - sin(n.x*2.6)*0.18)*2.4,2.0));
+    float dustLane = smoothstep(0.30,0.78,clouds)*broadBand;
+    vec3 col = vec3(0.006,0.009,0.017);
+    col += vec3(0.012,0.024,0.042)*broadBand;
+    col += mix(vec3(0.018,0.025,0.060),vec3(0.025,0.064,0.082),warp.x)*dustLane;
+    col += vec3(0.025,0.013,0.041)*pow(warp.y,2.0)*broadBand;
+    float fineVeil = exp(-pow((n.y + 0.08 - sin(n.x*2.2+0.6)*0.14)*15.0,2.0));
+    col += vec3(0.015,0.025,0.034)*fineVeil*clouds;
+    gl_FragColor = vec4(col,1.0);
   }
 `;
 
@@ -552,7 +572,10 @@ export function BioTwin3DStage({
   reducedMotionOverride,
   storyProgress,
   modelRotation,
+  bodyHidden = false,
 }: BioTwin3DStageProps) {
+  const bodyHiddenRef = useRef(bodyHidden);
+  bodyHiddenRef.current = bodyHidden;
   const effectiveMode: ClinicalVisualMode =
     visualMode ?? (xrayIntensity === "deep" ? "xray" : "atlas");
 
@@ -909,7 +932,7 @@ export function BioTwin3DStage({
     floorGroup.add(floorParticles);
     scene.add(floorGroup);
 
-    // Procedural deep-space nebula & starfield dome (strictly cool obsidian/cyan palette, never red)
+    // Slowly drifting blue/indigo gas clouds add depth behind the anatomical silhouette.
     const nebulaMaterial = new THREE.ShaderMaterial({
       vertexShader: NEBULA_VERTEX_SHADER,
       fragmentShader: NEBULA_FRAGMENT_SHADER,
@@ -927,7 +950,14 @@ export function BioTwin3DStage({
     );
     scene.add(nebulaDome);
 
-    // Distant orbiting light particles: no recognizable planet discs in the composition.
+    const projectedBodyBounds = new THREE.Vector4(-1,-1,2,2);
+    const bodyBounds = new THREE.Box3();
+    const bodyCorner = new THREE.Vector3();
+    const constellations = createConstellationField(renderer.getPixelRatio(), projectedBodyBounds);
+    constellations.group.visible = false;
+    scene.add(constellations.group);
+
+    // Distant orbiting light particles disabled for a cleaner backdrop.
     const orbitCount = 36;
     const orbitPositions = new Float32Array(orbitCount * 3);
     const orbitColors = new Float32Array(orbitCount * 3);
@@ -940,9 +970,9 @@ export function BioTwin3DStage({
     orbitGeometry.setAttribute("position", new THREE.BufferAttribute(orbitPositions, 3));
     orbitGeometry.setAttribute("color", new THREE.BufferAttribute(orbitColors, 3));
     const orbitHaloMaterial = new THREE.PointsMaterial({ size: 0.12, map: softDotTex ?? undefined,
-      vertexColors: true, transparent: true, opacity: 0.44, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+      vertexColors: true, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
     const orbitCoreMaterial = new THREE.PointsMaterial({ size: 0.034, map: softDotTex ?? undefined,
-      vertexColors: true, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+      vertexColors: true, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
     if (cinematic) scene.add(new THREE.Points(orbitGeometry, orbitHaloMaterial), new THREE.Points(orbitGeometry, orbitCoreMaterial));
 
     // Ambient floating cosmic dust particles around astronaut at varying depths
@@ -967,28 +997,8 @@ export function BioTwin3DStage({
       depthWrite: false,
     });
     const cosmicDust = new THREE.Points(dustGeo, dustMat);
+    cosmicDust.visible = false;
     scene.add(cosmicDust);
-
-    // A distant, slowly drifting arc of irregular rocks, with depth behind the BioTwin.
-    const asteroidBelt = new THREE.InstancedMesh(
-      new THREE.DodecahedronGeometry(0.018, 0),
-      new THREE.MeshStandardMaterial({ color: 0x3e6579, roughness: 1, metalness: 0.05, emissive: 0x2f8eb8, emissiveIntensity: 0.35, transparent: true, opacity: 0.48, depthWrite: false, fog: false }),
-      280,
-    );
-    const asteroidPose = new THREE.Object3D();
-    for (let i = 0; i < 280; i++) {
-      const angle = (i / 280) * Math.PI * 1.65 - 0.4;
-      const spread = (((i * 37) % 101) / 101 - 0.5);
-      const x = Math.cos(angle) * 5.5;
-      asteroidPose.position.set(x, Math.sin(angle) * 0.6 + x * 0.16 + spread * 0.3, -5.5 + Math.sin(angle) * 0.65 + spread * 0.6);
-      asteroidPose.rotation.set(i * 0.7, i * 1.1, i * 0.3);
-      asteroidPose.scale.setScalar(0.45 + ((i * 13) % 11) * 0.085);
-      asteroidPose.updateMatrix();
-      asteroidBelt.setMatrixAt(i, asteroidPose.matrix);
-    }
-    asteroidBelt.instanceMatrix.needsUpdate = true;
-    if (cinematic) scene.add(asteroidBelt);
-
 
     // 3D precision focus reticle orbiting the currently inspected organ
     const focusRingGroup = new THREE.Group();
@@ -1391,6 +1401,8 @@ export function BioTwin3DStage({
           shellObj.scale.set(1, 1, 1);
           shellObj.updateMatrix();
           shellEnvelope = buildShellEnvelope(shellObj.geometry);
+          shellObj.geometry.computeBoundingBox();
+          if (shellObj.geometry.boundingBox) bodyBounds.copy(shellObj.geometry.boundingBox);
           if (shellEnvelope && pendingArmBoneGroups.length > 0) {
             for (const grp of pendingArmBoneGroups) {
               containGroupInsideShell(grp, shellEnvelope, 0.008);
@@ -1823,21 +1835,21 @@ export function BioTwin3DStage({
       const dt = Math.min(clock.getDelta(), 0.05);
       const t = reducedMotionRef.current ? 0 : clock.elapsedTime;
       const snapshot = liveRef.current;
-      revealUniform.value = cinematicRef.current ? THREE.MathUtils.damp(revealUniform.value, modelLoaded ? 1 : 0, 2.8, dt) : 1;
+      revealUniform.value = cinematicRef.current ? THREE.MathUtils.damp(revealUniform.value, modelLoaded && !bodyHiddenRef.current ? 1 : 0, 2.8, dt) : 1;
 
       // Update camera fly-to timeline (cubic ease-in-out along a shallow arc, no spring overshoot)
       const story = storyProgressRef.current;
       const focus = story ? storyFocus(story.current) : null;
       if (story) {
         // Sample the same continuous curve at every frame. OrbitControls never rewrites this pose.
-        const idleTurn = reducedMotionRef.current ? 0 : Math.sin(t * 0.3) * 0.035 + Math.sin(story.current * 1.1) * 0.025;
+        const idleTurn = reducedMotionRef.current ? 0 : Math.sin(t * 0.3) * 0.035 + Math.sin(story.current * Math.PI * 2 / STORY_CHAPTER_COUNT) * 0.025;
         const requestedTurn = modelRotationRef.current?.current ?? 0;
         anatomyRoot.rotation.y = modelLoaded ? THREE.MathUtils.damp(anatomyRoot.rotation.y, requestedTurn + idleTurn, 5, dt) : 0;
         anatomyRoot.updateMatrixWorld(true);
         sampleBriefingPose(story.current, camera.position, storyTarget);
         storyTarget.applyMatrix4(anatomyRoot.matrixWorld);
         const portraitScale = camera.aspect < 0.85 ? 1.5 + (focus?.overview ?? 0) * 0.25 : 1;
-        const organMagnification = 1 - (1 - (focus?.overview ?? 1)) * 0.045;
+        const organMagnification = 1 - (1 - (focus?.overview ?? 1)) * 0.10;
         camera.position.sub(storyTarget).multiplyScalar(portraitScale * organMagnification).add(storyTarget);
         controls.target.copy(storyTarget);
         camera.lookAt(storyTarget);
@@ -1925,6 +1937,8 @@ export function BioTwin3DStage({
       );
       shellMaterial.uniforms.uAccentColor.value.lerp(targetColor, 0.12);
       nebulaMaterial.uniforms.uTime.value = t;
+      constellations.group.visible = false;
+      constellations.update(t, reducedMotionRef.current, camera.aspect);
       if (cinematicRef.current) {
         const positions = orbitGeometry.getAttribute("position") as THREE.BufferAttribute;
         for (let i = 0; i < orbitCount; i++) {
@@ -1936,8 +1950,6 @@ export function BioTwin3DStage({
         }
         positions.needsUpdate = true;
       }
-      asteroidBelt.rotation.y = t * 0.007;
-      asteroidBelt.rotation.z = Math.sin(t * 0.025) * 0.035;
       particleShellMaterial.uniforms.uTime.value = t;
       particleShellMaterial.uniforms.uFocusPos.value.copy(
         shellMaterial.uniforms.uFocusPos.value
@@ -2205,6 +2217,22 @@ export function BioTwin3DStage({
       camera.position.add(camRight).add(camUp);
       camera.updateMatrixWorld();
 
+      if (!bodyBounds.isEmpty()) {
+        projectedBodyBounds.set(Infinity,Infinity,-Infinity,-Infinity);
+        for (let corner = 0; corner < 8; corner++) {
+          bodyCorner.set(
+            corner & 1 ? bodyBounds.max.x : bodyBounds.min.x,
+            corner & 2 ? bodyBounds.max.y : bodyBounds.min.y,
+            corner & 4 ? bodyBounds.max.z : bodyBounds.min.z,
+          ).applyMatrix4(anatomyRoot.matrixWorld).project(camera);
+          const x = bodyCorner.x * 0.5 + 0.5, y = bodyCorner.y * 0.5 + 0.5;
+          projectedBodyBounds.x = Math.min(projectedBodyBounds.x,x);
+          projectedBodyBounds.y = Math.min(projectedBodyBounds.y,y);
+          projectedBodyBounds.z = Math.max(projectedBodyBounds.z,x);
+          projectedBodyBounds.w = Math.max(projectedBodyBounds.w,y);
+        }
+      }
+
       composer.render();
 
       // Project 3D organ anchors to 2D callout pill positions via refs (zero React re-renders)
@@ -2270,7 +2298,7 @@ export function BioTwin3DStage({
       renderer.domElement.removeEventListener("pointerleave", handlePointerLeave);
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
       scene.traverse((obj) => {
-        if (obj instanceof THREE.Mesh || obj instanceof THREE.Points) {
+        if (obj instanceof THREE.Mesh || obj instanceof THREE.Points || obj instanceof THREE.LineSegments) {
           obj.geometry?.dispose();
           if (Array.isArray(obj.material)) {
             obj.material.forEach((m) => m.dispose());
@@ -2281,7 +2309,6 @@ export function BioTwin3DStage({
       });
       composer.dispose();
       bloomPass.dispose();
-      if (!cinematic) { asteroidBelt.geometry.dispose(); (asteroidBelt.material as THREE.Material).dispose(); }
       softDotTex?.dispose();
       if (!cinematic) { orbitGeometry.dispose(); orbitHaloMaterial.dispose(); orbitCoreMaterial.dispose(); }
       renderer.dispose();

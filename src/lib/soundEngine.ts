@@ -42,11 +42,8 @@ class AresSoundEngine {
   }
 
   public initAutoplay(): boolean {
-    if (typeof window === "undefined") return false;
-    if (this.enabled) return true;
-    this.enabled = true;
-    this.startBackgroundOrAmbient(true);
-    return true;
+    // Background music disabled by project preference; UI SFX remain available on explicit toggle.
+    return false;
   }
 
   private clearAutoplayUnlock(): void {
@@ -84,51 +81,9 @@ class AresSoundEngine {
     return this.enabled;
   }
 
-  private startBackgroundOrAmbient(fromAutoplay = false): void {
-    if (typeof window === "undefined") return;
-    if (this.bgUnavailable) {
-      if (!fromAutoplay) this.startAmbient();
-      else this.armAutoplayUnlock();
-      return;
-    }
-
-    if (!this.bgAudio) {
-      const audio = new Audio(BG_PLAYLIST[this.bgTrackIndex]);
-      audio.preload = "auto";
-      audio.volume = 0;
-      audio.addEventListener("ended", () => {
-        this.bgTrackIndex = (this.bgTrackIndex + 1) % BG_PLAYLIST.length;
-        audio.src = BG_PLAYLIST[this.bgTrackIndex];
-        if (this.enabled) {
-          void audio.play().catch(() => {});
-        }
-      });
-      audio.addEventListener("error", () => {
-        this.bgUnavailable = true;
-        this.bgAudio = null;
-        if (this.enabled) {
-          this.startAmbient();
-        }
-      });
-      this.bgAudio = audio;
-    }
-
-    const audio = this.bgAudio;
-    void audio
-      .play()
-      .then(() => {
-        if (!this.enabled) return;
-        this.clearAutoplayUnlock();
-        this.fadeAudioTo(audio, 0.24, 900);
-      })
-      .catch(() => {
-        if (!this.enabled) return;
-        if (fromAutoplay) {
-          this.armAutoplayUnlock();
-        } else {
-          this.startAmbient();
-        }
-      });
+  private startBackgroundOrAmbient(_fromAutoplay = false): void {
+    // Background music / ambient drone intentionally disabled.
+    return;
   }
 
   private fadeAudioTo(

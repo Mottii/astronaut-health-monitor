@@ -29,10 +29,29 @@ export interface PresentationSlide {
 
 export const PRESENTATION_SLIDES: PresentationSlide[] = [
   {
-    id: "mission-overview",
+    id: "title",
     chapterCode: "01",
+    chapterLabel: "ARES-MED",
+    kicker: "AUTONOMOUS MEDICINE / DEEP SPACE",
+    title: "ARES-MED",
+    summary: "A human digital twin. Autonomous care. Wherever the mission takes us.",
+    ctaLabel: "EXPLORE THE MISSION",
+    scenarioId: "nominal",
+    focusSystem: "cardiovascular",
+    cameraPreset: "full",
+    visualMode: "atlas",
+    autoRotate: true,
+    osdrRefs: ["NASA SPACE APPS", "ARES-MED"],
+    metrics: [
+      { label: "BioTwin Coverage", earthValue: "Standard Lab", spaceValue: "6 Systems", unit: "Multi-Organ" },
+      { label: "Autonomous Triage", earthValue: "Ground Loop", spaceValue: "Onboard AI", unit: "CMO Ready" },
+    ],
+  },
+  {
+    id: "mission-overview",
+    chapterCode: "02",
     chapterLabel: "MISSION",
-    kicker: "CHAPTER 01 // DEEP-SPACE AUTONOMY",
+    kicker: "CHAPTER 02 // DEEP-SPACE AUTONOMY",
     title: "AUTONOMOUS MEDICINE FOR DEEP SPACE",
     summary:
       "At 225M km, 14m 20s one-way signal delay makes real-time Flight Surgeon guidance impossible — and Earth clinical baselines fail in altered gravity.",
@@ -60,7 +79,7 @@ export const PRESENTATION_SLIDES: PresentationSlide[] = [
   },
   {
     id: "neuro-ocular-sans",
-    chapterCode: "02",
+    chapterCode: "03",
     chapterLabel: "NEURO-OCULAR",
     kicker: "CASCADE 01 // CEPHALAD FLUID SHIFT",
     title: "FLUID SHIFT & CO₂ STRAIN VISION",
@@ -92,7 +111,7 @@ export const PRESENTATION_SLIDES: PresentationSlide[] = [
   },
   {
     id: "cardiovascular-adaptation",
-    chapterCode: "03",
+    chapterCode: "04",
     chapterLabel: "CARDIOVASCULAR",
     kicker: "CASCADE 02 // BARORECEPTOR RESET",
     title: "VASCULAR LOAD IN 0G MICROGRAVITY",
@@ -123,7 +142,7 @@ export const PRESENTATION_SLIDES: PresentationSlide[] = [
   },
   {
     id: "renal-bone-calcium",
-    chapterCode: "04",
+    chapterCode: "05",
     chapterLabel: "RENAL & BONE",
     kicker: "CASCADE 03 // HYPERCALCIURIA",
     title: "BONE CALCIUM LOSS → RENAL STONES",
@@ -155,7 +174,7 @@ export const PRESENTATION_SLIDES: PresentationSlide[] = [
   },
   {
     id: "radiation-immune",
-    chapterCode: "05",
+    chapterCode: "06",
     chapterLabel: "RADIATION",
     kicker: "CASCADE 04 // SOLAR PARTICLE EVENT",
     title: "X-FLARE RADIATION & IMMUNE DROP",
@@ -187,13 +206,13 @@ export const PRESENTATION_SLIDES: PresentationSlide[] = [
   },
   {
     id: "metabolic-circadian",
-    chapterCode: "06",
+    chapterCode: "07",
     chapterLabel: "METABOLIC",
     kicker: "CASCADE 05 // ISOLATION & SLEEP DEBT",
     title: "CIRCADIAN DRIFT & INSULIN SHIFT",
     summary:
       "16 orbital sunrises/day and confinement stress elevate cortisol, shifting fasting glucose toward subclinical insulin resistance.",
-    ctaLabel: "NEXT: CMO HANDOFF",
+    ctaLabel: "BACK TO ARES-MED",
     scenarioId: "renal_dehydration",
     focusSystem: "metabolic_endocrine",
     cameraPreset: "metabolic_endocrine",
@@ -214,37 +233,6 @@ export const PRESENTATION_SLIDES: PresentationSlide[] = [
         spaceValue: "5.7",
         unit: "hrs/day",
         critical: true,
-      },
-    ],
-  },
-  {
-    id: "cmo-handoff",
-    chapterCode: "07",
-    chapterLabel: "CMO HANDOFF",
-    kicker: "CHAPTER 07 // DIAGNOSTIC SUMMARY & ACTION",
-    title: "FROM SIGNALS TO CMO ACTION",
-    summary:
-      "All six physiological systems and domino cascades are synthesized into a prioritized Crew Medical Officer triage plan ready for autonomous intervention.",
-    ctaLabel: "OPEN FULL CMO CONSOLE",
-    scenarioId: "solar_storm",
-    focusSystem: "cardiovascular",
-    cameraPreset: "full",
-    visualMode: "atlas",
-    autoRotate: true,
-    preserveActiveScenario: true,
-    osdrRefs: ["NASA HRP", "ARES-MED"],
-    metrics: [
-      {
-        label: "BioTwin Coverage",
-        earthValue: "Standard Lab",
-        spaceValue: "6 Systems",
-        unit: "Multi-Organ",
-      },
-      {
-        label: "Autonomous Triage",
-        earthValue: "Ground Loop",
-        spaceValue: "Onboard AI",
-        unit: "CMO Ready",
       },
     ],
   },
