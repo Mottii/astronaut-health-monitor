@@ -589,7 +589,7 @@ export function BioTwin3DStage({
       mountedSelectionRef.current = true;
       return;
     }
-    const view = ORGAN_CAMERA_VIEWS[selectedSystem];
+    const view = ORGAN_CAMERA_VIEWS[selectedSystem] ?? FULL_BODY_VIEW;
     flyRef.current = {
       active: true,
       targetPos: view.position.clone(),
@@ -611,7 +611,9 @@ export function BioTwin3DStage({
   useEffect(() => {
     if (!cameraPreset) return;
     const view =
-      cameraPreset === "full" ? FULL_BODY_VIEW : ORGAN_CAMERA_VIEWS[cameraPreset];
+      cameraPreset === "full"
+        ? FULL_BODY_VIEW
+        : (ORGAN_CAMERA_VIEWS[cameraPreset] ?? FULL_BODY_VIEW);
     flyRef.current = {
       active: true,
       targetPos: view.position.clone(),
