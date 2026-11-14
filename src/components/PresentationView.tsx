@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -82,33 +82,27 @@ export function PresentationView({
   spaceWeather,
 }: PresentationViewProps) {
   const slide = PRESENTATION_SLIDES[slideIndex] ?? PRESENTATION_SLIDES[0];
-  const [phase, setPhase] = useState<"orbital" | "biotwin">("orbital");
   const [soundOn, setSoundOn] = useState<boolean>(() => soundEngine.isEnabled());
   const [introOpen, setIntroOpen] = useState<boolean>(true);
   const [cameraResetToken, setCameraResetToken] = useState<number>(0);
 
-  const orbitalIframeRef = useRef<HTMLIFrameElement | null>(null);
-  const orbitalResetProgressRef = useRef<number | null>(null);
   const lastWheelAtRef = useRef<number>(0);
   const scrambledTitle = useScrambleText(slide.title);
 
-  const goToSlide = useCallback(
-    (nextIdx: number) => {
-      const clamped = Math.max(
-        0,
-        Math.min(PRESENTATION_SLIDES.length - 1, nextIdx)
-      );
-      if (clamped === slideIndex) return;
+  function goToSlide(nextIdx: number) {
+    const clamped = Math.max(
+      0,
+      Math.min(PRESENTATION_SLIDES.length - 1, nextIdx)
+    );
+    if (clamped === slideIndex) return;
 
-      const nextSlide = PRESENTATION_SLIDES[clamped];
-      soundEngine.playCameraWhoosh();
-      if (nextSlide.metrics.some((m) => m.critical)) {
-        window.setTimeout(() => soundEngine.playAlertPulse(), 180);
-      }
-      onSelectSlide(clamped);
-    },
-    [onSelectSlide, slideIndex]
-  );
+    const nextSlide = PRESENTATION_SLIDES[clamped];
+    soundEngine.playCameraWhoosh();
+    if (nextSlide.metrics.some((m) => m.critical)) {
+      window.setTimeout(() => soundEngine.playAlertPulse(), 180);
+    }
+    onSelectSlide(clamped);
+  }
 
   function handlePrimaryCta() {
     soundEngine.playHoverTick();
@@ -124,43 +118,14 @@ export function PresentationView({
     setSoundOn(next);
   }
 
-  function enterBriefing(
-    withAudio: boolean,
-    targetPhase: "orbital" | "biotwin" = "orbital"
-  ) {
+  function enterBriefing(withAudio: boolean) {
     if (withAudio && !soundEngine.isEnabled()) {
       setSoundOn(soundEngine.setEnabled(true));
     } else {
       soundEngine.playCameraWhoosh();
     }
-    setPhase(targetPhase);
     setIntroOpen(false);
   }
-
-  function returnToOrbital() {
-    soundEngine.playCameraWhoosh();
-    orbitalResetProgressRef.current = 0.92;
-    setPhase("orbital");
-  }
-
-  // Listen for handoff & console events from the embedded /orbital 3D experience
-  useEffect(() => {
-    const onMessage = (e: MessageEvent) => {
-      if (e.origin !== window.location.origin) return;
-      if (e.data?.type === "ARES_ENTER_BIOTWIN") {
-        soundEngine.playCameraWhoosh();
-        onSelectSlide(0);
-        setCameraResetToken((n) => n + 1);
-        setPhase("biotwin");
-      } else if (e.data?.type === "ARES_OPEN_CONSOLE") {
-        soundEngine.playHoverTick();
-        onOpenConsole();
-      }
-    };
-
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [onOpenConsole, onSelectSlide]);
 
   // Keyboard navigation (Arrow keys / Space)
   useEffect(() => {
@@ -183,10 +148,6 @@ export function PresentationView({
         return;
       }
 
-      if (phase !== "biotwin") {
-        return;
-      }
-
       if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === " ") {
         e.preventDefault();
         if (slideIndex >= PRESENTATION_SLIDES.length - 1) {
@@ -202,11 +163,11 @@ export function PresentationView({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [goToSlide, introOpen, onOpenConsole, phase, slideIndex]);
+  });
 
-  // Wheel navigation with smooth cooldown (BioTwin phase only)
+  // Wheel navigation with smooth cooldown
   function handleWheel(e: React.WheelEvent<HTMLDivElement>) {
-    if (introOpen || phase !== "biotwin") return;
+    if (introOpen) return;
     if (Math.abs(e.deltaY) < 28) return;
     const now = performance.now();
     if (now - lastWheelAtRef.current < 580) return;
@@ -224,116 +185,84 @@ export function PresentationView({
       onWheel={handleWheel}
       className="relative h-screen w-screen overflow-hidden bg-[#06070a] text-white select-none"
     >
-      {phase === "orbital" ? (
-        <iframe
-          ref={orbitalIframeRef}
-          title="ARES-MED Earth to ISS Orbital Trajectory"
-          src="/orbital/index.html"
-          className="absolute inset-0 z-10 h-full w-full border-0 bg-[#06070a]"
-          onLoad={() => {
-            if (orbitalResetProgressRef.current !== null) {
-              const targetProgress = orbitalResetProgressRef.current;
-              orbitalResetProgressRef.current = null;
-              window.setTimeout(() => {
-                orbitalIframeRef.current?.contentWindow?.postMessage(
-                  { type: "ARES_RESET_ORBITAL", progress: targetProgress },
-                  window.location.origin
-                );
-              }, 180);
-            }
-          }}
+      {/* Fullscreen 3D Astronaut Stage */}
+      <div className="absolute inset-0 z-0">
+        <BioTwin3DStage
+          assessments={evaluation.systems}
+          cascades={evaluation.activeCascades}
+          selectedSystem={selectedSystem}
+          onSelectSystem={onSelectSystem}
+          vitals={vitals}
+          envTelemetry={envTelemetry}
+          visualMode={slide.visualMode}
+          autoRotate={slide.autoRotate}
+          cameraResetToken={cameraResetToken}
+          cameraPreset={introOpen ? "full" : slide.cameraPreset}
+          enableParallax={true}
+          allowWheelZoom={false}
+          hideBottomHud={true}
+          calloutFilter={slideIndex === 0 ? "none" : "selected"}
         />
-      ) : (
-        <>
-          {/* Fullscreen 3D Astronaut Stage */}
-          <div className="absolute inset-0 z-0">
-            <BioTwin3DStage
-              assessments={evaluation.systems}
-              cascades={evaluation.activeCascades}
-              selectedSystem={selectedSystem}
-              onSelectSystem={onSelectSystem}
-              vitals={vitals}
-              envTelemetry={envTelemetry}
-              visualMode={slide.visualMode}
-              autoRotate={slide.autoRotate}
-              cameraResetToken={cameraResetToken}
-              cameraPreset={introOpen ? "full" : slide.cameraPreset}
-              enableParallax={true}
-              allowWheelZoom={false}
-              hideBottomHud={true}
-              calloutFilter={slideIndex === 0 ? "none" : "selected"}
-            />
-          </div>
+      </div>
 
-          {/* Subtle Vignette & Edge Readability Gradients */}
-          <div
-            className="pointer-events-none absolute inset-0 z-10"
+      {/* Subtle Vignette & Edge Readability Gradients */}
+      <div
+        className="pointer-events-none absolute inset-0 z-10"
+        aria-hidden="true"
+        style={{
+          background:
+            "radial-gradient(circle at 50% 44%, rgba(6,7,10,0) 28%, rgba(6,7,10,0.68) 100%), linear-gradient(to top, rgba(6,7,10,0.92) 0%, rgba(6,7,10,0.45) 26%, rgba(6,7,10,0) 52%)",
+        }}
+      />
+
+      {/* Top Architectural Frame Bar (28px unified HUD margin) */}
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center justify-between px-5 py-5 sm:px-7 sm:py-7">
+        {/* Brand */}
+        <button
+          type="button"
+          onClick={() => {
+            setCameraResetToken((n) => n + 1);
+            goToSlide(0);
+          }}
+          className="pointer-events-auto flex items-center gap-2.5 text-left transition opacity-90 hover:opacity-100"
+        >
+          <svg
+            viewBox="0 0 32 32"
+            className="h-5 w-5 text-white"
+            fill="none"
             aria-hidden="true"
-            style={{
-              background:
-                "radial-gradient(circle at 50% 44%, rgba(6,7,10,0) 28%, rgba(6,7,10,0.68) 100%), linear-gradient(to top, rgba(6,7,10,0.92) 0%, rgba(6,7,10,0.45) 26%, rgba(6,7,10,0) 52%)",
+          >
+            <path
+              d="M4 26L14.5 6H18.5L28 26H23.2L16.5 11.4L9.2 26H4Z"
+              fill="currentColor"
+            />
+            <path
+              d="M5 20.5C11.5 14 20.5 11 29 9.5"
+              stroke="#06070a"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+            />
+          </svg>
+          <span className="font-mono text-xs font-semibold tracking-[0.22em] text-white">
+            ARES-MED
+          </span>
+        </button>
+
+        {/* Top-Right Single Console Action (Matched to CTA Glassmorphism) */}
+        <div className="pointer-events-auto flex items-center">
+          <button
+            type="button"
+            onClick={() => {
+              soundEngine.playHoverTick();
+              onOpenConsole();
             }}
-          />
-
-          {/* Top Architectural Frame Bar (28px unified HUD margin) */}
-          <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center justify-between px-5 py-5 sm:px-7 sm:py-7">
-            {/* Brand + Return to ISS Orbit */}
-            <div className="pointer-events-auto flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setCameraResetToken((n) => n + 1);
-                  goToSlide(0);
-                }}
-                className="flex items-center gap-2.5 text-left transition opacity-90 hover:opacity-100"
-              >
-                <svg
-                  viewBox="0 0 32 32"
-                  className="h-5 w-5 text-white"
-                  fill="none"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M4 26L14.5 6H18.5L28 26H23.2L16.5 11.4L9.2 26H4Z"
-                    fill="currentColor"
-                  />
-                  <path
-                    d="M5 20.5C11.5 14 20.5 11 29 9.5"
-                    stroke="#06070a"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                  />
-                </svg>
-                <span className="font-mono text-xs font-semibold tracking-[0.22em] text-white">
-                  ARES-MED
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={returnToOrbital}
-                className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.06] px-3 font-mono text-[10px] font-medium tracking-[0.16em] text-white/80 backdrop-blur-md transition hover:border-sky-400/50 hover:bg-sky-400/15 hover:text-white"
-              >
-                <ArrowLeft className="h-3 w-3" aria-hidden="true" />
-                <span>ISS ORBIT</span>
-              </button>
-            </div>
-
-            {/* Top-Right Single Console Action (Matched to CTA Glassmorphism) */}
-            <div className="pointer-events-auto flex items-center">
-              <button
-                type="button"
-                onClick={() => {
-                  soundEngine.playHoverTick();
-                  onOpenConsole();
-                }}
-                className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-white/25 bg-white/10 px-4 font-mono text-[10px] font-semibold tracking-[0.18em] text-white backdrop-blur-md transition hover:border-white hover:bg-white hover:text-[#06070a]"
-              >
-                <span>CMO CONSOLE</span>
-                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
-            </div>
-          </header>
+            className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-white/25 bg-white/10 px-4 font-mono text-[10px] font-semibold tracking-[0.18em] text-white backdrop-blur-md transition hover:border-white hover:bg-white hover:text-[#06070a]"
+          >
+            <span>CMO CONSOLE</span>
+            <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </div>
+      </header>
 
       {/* Left Compact HUD: Earth vs. Spaceflight Metrics (hidden on Slide 01 cover, clean glass cards on 02-06) */}
       {slideIndex > 0 && (
@@ -502,11 +431,9 @@ export function PresentationView({
           </button>
         </div>
       </section>
-        </>
-      )}
 
-      {/* Persistent Audio Control & Chapter Counter across both phases */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex items-center justify-between px-5 py-5 sm:px-7 sm:py-7">
+      {/* Bottom Corner Controls (shifted past Next.js dev badge on bottom-left; minimal counter on bottom-right) */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex items-center justify-between px-5 py-5 sm:px-7 sm:py-7">
         <button
           type="button"
           onClick={handleToggleSound}
@@ -520,16 +447,14 @@ export function PresentationView({
           <span>{soundOn ? "SOUND ON" : "SOUND OFF"}</span>
         </button>
 
-        {phase === "biotwin" && (
-          <span className="font-mono text-[10px] tracking-[0.22em] text-white/55">
-            {slide.chapterCode} / 06
-          </span>
-        )}
+        <span className="font-mono text-[10px] tracking-[0.22em] text-white/55">
+          {slide.chapterCode} / 06
+        </span>
       </div>
 
       {/* Intro Portal Gate (Active Theory Style) */}
       {introOpen && (
-        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#06070a]/75 px-6 text-center backdrop-blur-md transition-opacity duration-500">
+        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-[#06070a]/75 px-6 text-center backdrop-blur-md transition-opacity duration-500">
           <span className="font-mono text-[10px] tracking-[0.28em] text-sky-300/85">
             NASA SPACE APPS CHALLENGE 2026 // ALMATY
           </span>
@@ -537,15 +462,14 @@ export function PresentationView({
             ARES-MED OS
           </h2>
           <p className="mt-3 max-w-md text-xs leading-relaxed text-white/60 sm:text-sm">
-            Interactive 3D Earth-to-ISS orbital ascent, EVA BioTwin organ-cascade
-            briefing &amp; autonomous Chief Medical Officer console for deep-space
-            missions.
+            Interactive 3D BioTwin organ-cascade briefing &amp; autonomous Chief
+            Medical Officer console for deep-space missions.
           </p>
 
           <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
             <button
               type="button"
-              onClick={() => enterBriefing(true, "orbital")}
+              onClick={() => enterBriefing(true)}
               className="inline-flex h-11 cursor-pointer items-center gap-2.5 rounded-lg bg-white px-6 font-mono text-[11px] font-semibold tracking-[0.18em] text-[#06070a] transition hover:bg-sky-100 active:scale-[0.98]"
             >
               <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
@@ -553,18 +477,10 @@ export function PresentationView({
             </button>
             <button
               type="button"
-              onClick={() => enterBriefing(false, "orbital")}
+              onClick={() => enterBriefing(false)}
               className="inline-flex h-11 cursor-pointer items-center gap-2 rounded-lg border border-white/20 bg-white/[0.06] px-5 font-mono text-[11px] font-medium tracking-[0.18em] text-white/85 transition hover:border-white/40 hover:text-white"
             >
               <span>SILENT MODE</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => enterBriefing(false, "biotwin")}
-              className="inline-flex h-11 cursor-pointer items-center gap-2 rounded-lg border border-sky-400/35 bg-sky-400/10 px-5 font-mono text-[11px] font-medium tracking-[0.18em] text-sky-200 transition hover:border-sky-300 hover:bg-sky-400/20 hover:text-white"
-            >
-              <span>DIRECT BIOTWIN 3D</span>
-              <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
           </div>
         </div>
