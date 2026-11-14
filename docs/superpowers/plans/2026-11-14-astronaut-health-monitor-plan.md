@@ -184,21 +184,21 @@
   - `RoutineGamificationBar({ tasks, progress, onToggleTask, onResetDay })`
   - Complete Mission Console in `src/app/page.tsx`
 
-- [ ] **Step 1: Write failing test for `routineStorage.ts` in `src/lib/__tests__/routineStorage.test.ts`**
+- [x] **Step 1: Write failing test for `routineStorage.ts` in `src/lib/__tests__/routineStorage.test.ts`**
   Assert:
   1. Empty or corrupted `localStorage` JSON returns clean default state (`completedTaskIds: []`, `xp: 0`, `streakSols: 12`).
   2. `toggleRoutineTask` adds XP once on check and removes XP idempotently on uncheck (never double-counts).
-- [ ] **Step 2: Run test to verify it fails, implement `src/lib/routineStorage.ts`, and re-run to verify PASS**
+- [x] **Step 2: Run test to verify it fails, implement `src/lib/routineStorage.ts`, and re-run to verify PASS**
   Run: `npx vitest run src/lib/__tests__/routineStorage.test.ts` -> Expected: PASS.
-- [ ] **Step 3: Build `src/components/AutonomousCmoPanel.tsx` & `src/components/RoutineGamificationBar.tsx`**
+- [x] **Step 3: Build `src/components/AutonomousCmoPanel.tsx` & `src/components/RoutineGamificationBar.tsx`**
   - `AutonomousCmoPanel`: Displays the selected system's triage status, NASA HRP Risk title + OSDR study accession badge (`OSD-48`, etc.), interactive 3-step **Guided Self-Exam Checklist** (*Why this exam is needed* -> *How to measure in space* -> *Immediate Crew Countermeasures*), and a **Flight Surgeon Escalation / Telemetry Packet** button with copy-to-clipboard (showing comm delay warning when in `mars_transit` or `mars_base`).
   - `RoutineGamificationBar`: Displays Sol Streak, XP level badge, and interactive mission routine checkboxes.
-- [ ] **Step 4: Wire full console in `src/app/page.tsx` and update `README.md`**
+- [x] **Step 4: Wire full console in `src/app/page.tsx` and update `README.md`**
   - `src/app/page.tsx`: Top Mission Bar (Environment switcher, Live NASA DONKI solar weather sync pill with fallback indicator, Mission Readiness Score, 4 Demo Scenario presets), 3-column workspace (`BioTwinBodyMap` | `VitalsInputPanel` + `TelemetryCharts` | `AutonomousCmoPanel` + `RoutineGamificationBar`), and footer citing all 5 official challenge resources.
   - `README.md`: Update with screenshots/architecture summary, local run commands (`npm install`, `npm run dev`, `npm test`), and complete NASA/CSA/OSDR/DONKI citations.
-- [ ] **Step 5: Run full verification suite & production build**
+- [x] **Step 5: Run full verification suite & production build**
   Run: `npx vitest run && npx tsc --noEmit && npm run build` -> Expected: all tests pass, zero TypeScript errors, Next.js build succeeds cleanly.
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   ```bash
   git add src/ README.md
   git commit -m "feat: integrate Autonomous CMO triage console, gamified routine, and mission dashboard"
