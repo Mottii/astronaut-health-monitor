@@ -349,7 +349,7 @@ export default function PreFlightAdminPage() {
 
           {/* Primary In-Flight 3D Console Link */}
           <Link
-            href="/"
+            href="/?mode=console"
             data-testid="launch-3d-console-link"
             className="mt-2.5 flex items-center justify-between rounded-xl border border-white/[0.08] bg-[#171717] px-3 py-2 text-xs font-medium text-[#ececec] transition hover:border-white/20 hover:bg-[#1f1f1f]"
           >

@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link";
 import {
   Activity,
+  ArrowLeft,
   BarChart3,
   Check,
   CheckCircle2,
@@ -23,6 +24,7 @@ import {
 import { AutonomousCmoPanel } from "@/components/AutonomousCmoPanel";
 import { BioTwinBodyMap } from "@/components/BioTwinBodyMap";
 import { HardwareBridgeDrawer } from "@/components/HardwareBridgeDrawer";
+import { PresentationView } from "@/components/PresentationView";
 import { RoutineGamificationBar } from "@/components/RoutineGamificationBar";
 import { TelemetryCharts } from "@/components/TelemetryCharts";
 import { VitalsInputPanel } from "@/components/VitalsInputPanel";
@@ -35,6 +37,7 @@ import {
   MISSION_ENVIRONMENTS,
   NASA_HAZARDS,
 } from "@/data/nasaHrpData";
+import { PRESENTATION_SLIDES } from "@/data/presentationSlides";
 import { generateAstroskinTelemetryFrame } from "@/lib/biometricBridge";
 import {
   fetchIssLiveSnapshot,
@@ -260,6 +263,10 @@ export default function HomePage() {
     null
   );
   const [isSyncingWeather, setIsSyncingWeather] = useState<boolean>(false);
+  const [surfaceMode, setSurfaceMode] = useState<"presentation" | "console">(
+    "presentation"
+  );
+  const [slideIndex, setSlideIndex] = useState<number>(0);
   const [activeDrawer, setActiveDrawer] = useState<
     "none" | "trends" | "routine" | "hardware"
   >("none");
@@ -306,6 +313,12 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
+    if (
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mode") === "console"
+    ) {
+      setSurfaceMode("console");
+    }
     setRoutineProgress(loadRoutineProgress());
     setCrewStore(loadCrewProfilesState());
     setCrewHydrated(true);
@@ -597,6 +610,41 @@ export default function HomePage() {
     const reset = resetRoutineDay();
     saveRoutineProgress(reset);
     setRoutineProgress(reset);
+  }
+
+  function handleSelectSlide(nextIndex: number) {
+    const slide = PRESENTATION_SLIDES[nextIndex];
+    if (!slide) return;
+    setSlideIndex(nextIndex);
+    setTelemetryMode("preset");
+    const scenario = DEMO_SCENARIOS.find((s) => s.id === slide.scenarioId);
+    if (scenario) {
+      setActiveScenarioId(scenario.id);
+      setEnvId(scenario.environmentId);
+      setPresetVitals(scenario.vitals);
+      setPresetEnv(scenario.envTelemetry);
+      setCountermeasureVitalsPatch({});
+      setCountermeasureEnvPatch({});
+    }
+    setSelectedSystem(slide.focusSystem);
+  }
+
+  if (surfaceMode === "presentation") {
+    return (
+      <PresentationView
+        slideIndex={slideIndex}
+        onSelectSlide={handleSelectSlide}
+        onOpenConsole={() => setSurfaceMode("console")}
+        evaluation={evaluation}
+        vitals={vitals}
+        envTelemetry={envTelemetry}
+        selectedSystem={selectedSystem}
+        onSelectSystem={setSelectedSystem}
+        isSyncingWeather={isSyncingWeather}
+        onSyncSpaceWeather={handleSyncSpaceWeather}
+        spaceWeather={spaceWeather}
+      />
+    );
   }
 
   const telemetryStripChannels: Array<{
@@ -1052,6 +1100,16 @@ export default function HomePage() {
                     aria-hidden="true"
                   />
                 )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSurfaceMode("presentation")}
+                title="Return to 3D Presentation Slides"
+                className="inline-flex h-[26px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-md px-2 text-[10.5px] font-medium text-[#d4d4d8] transition hover:bg-white/[0.05] hover:text-white"
+              >
+                <ArrowLeft className="h-3 w-3 text-[#8b909a]" aria-hidden="true" />
+                <span className="hidden xl:inline">Slides</span>
               </button>
             </div>
 

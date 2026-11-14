@@ -10,8 +10,8 @@
   --color-card-04: #2b2b2b;
   --color-fog: #7e828a;
   --color-umbra: #1f242d;
-  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Geist Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+  --font-sans: var(--font-space-grotesk), ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", Roboto, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, "SF Mono", "Geist Mono", Menlo, Monaco, Consolas, monospace;
 }
 
 body {
