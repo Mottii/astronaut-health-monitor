@@ -122,6 +122,19 @@ const TISSUE_COLOR_HEX: Record<string, string> = {
   Bone: "#94a3b8",         // unified X-ray slate bone
 };
 
+function resolveStructureColorHex(parsed: ParsedSubStructure): string {
+  const label = parsed.structureLabel;
+  if (parsed.systemId === "metabolic_endocrine") {
+    if (label.includes("Small Intestine")) return "#d97757";      // warm coral-peach small bowel
+    if (label.includes("Large Intestine")) return "#7ca368";      // distinct sage-olive colon
+    if (label.includes("Pancreas")) return "#e0a838";             // amber-gold pancreas
+    if (label.includes("Caudate")) return "#c95842";              // copper-red caudate/porta
+    if (label.includes("Parenchyma")) return "#8c3b36";           // deep mahogany liver lobes
+    if (label.includes("Ligament")) return "#d6c38b";             // pale gold hepatic ligaments
+  }
+  return TISSUE_COLOR_HEX[parsed.tissueTag] ?? SYSTEM_BASE_HEX[parsed.systemId];
+}
+
 const DEFAULT_STRUCTURE_BY_SYSTEM: Record<BodySystemId, HoveredStructureInfo> = {
   neuro_ocular: {
     systemId: "neuro_ocular",
@@ -1137,7 +1150,7 @@ export function BioTwin3DStage({
           }
 
           const isShell = parsed.layer === "Shell";
-          const baseHex = TISSUE_COLOR_HEX[parsed.tissueTag] ?? SYSTEM_BASE_HEX[sysId];
+          const baseHex = resolveStructureColorHex(parsed);
           const baseColor = new THREE.Color(baseHex);
           const baseOpacity = isShell
             ? 0.72
