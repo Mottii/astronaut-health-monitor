@@ -17,7 +17,9 @@ import type {
   BodySystemId,
   CascadeLink,
   EnvironmentTelemetry,
+  SelectedSubStructure,
   SystemAssessment,
+  TelemetryMode,
   TriageStatus,
   VitalReadings,
 } from "@/types/health";
@@ -27,8 +29,11 @@ export interface BioTwinBodyMapProps {
   cascades: CascadeLink[];
   selectedSystem: BodySystemId;
   onSelectSystem: (systemId: BodySystemId) => void;
+  onSelectSubStructure?: (info: SelectedSubStructure) => void;
   vitals?: VitalReadings;
   envTelemetry?: EnvironmentTelemetry;
+  telemetryMode?: TelemetryMode;
+  hardwareSourceLabel?: string;
 }
 
 const SYSTEM_ORDER: BodySystemId[] = [
@@ -144,8 +149,11 @@ export function BioTwinBodyMap({
   cascades,
   selectedSystem,
   onSelectSystem,
+  onSelectSubStructure,
   vitals,
   envTelemetry,
+  telemetryMode,
+  hardwareSourceLabel,
 }: BioTwinBodyMapProps) {
   const [viewMode, setViewMode] = useState<"3d" | "2d">("3d");
   const [visualMode, setVisualMode] = useState<ClinicalVisualMode>("atlas");
@@ -155,10 +163,10 @@ export function BioTwinBodyMap({
   return (
     <section
       aria-label="BioTwin Anatomical Body Map"
-      className="flex flex-col lg:h-[740px] lg:flex-row"
+      className="flex min-h-0 flex-col overflow-hidden lg:h-full lg:flex-row"
     >
-      {/* Left Sidebar (x.ai/bot Desktop App Sidebar Style) */}
-      <aside className="flex shrink-0 flex-col justify-between border-b border-white/[0.07] bg-[#141414] p-4 lg:w-[296px] lg:overflow-y-auto lg:border-r lg:border-b-0">
+      {/* Left Sidebar (Compact Clinical Organ Node Selector & Cascade Feed) */}
+      <aside className="flex shrink-0 flex-col justify-between border-b border-white/[0.07] bg-[#141414] p-3.5 lg:w-[248px] xl:w-[272px] lg:overflow-y-auto lg:border-r lg:border-b-0">
         <div>
           <div className="mb-3 flex items-center justify-between">
             <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#7e828a]">
@@ -285,7 +293,7 @@ export function BioTwinBodyMap({
       </aside>
 
       {/* Center Anatomical Viewport */}
-      <div className="relative flex min-w-0 flex-1 flex-col justify-between overflow-hidden bg-[#0a0a0a] p-4 sm:p-5">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col justify-between overflow-hidden bg-[#0a0a0a] p-3 sm:p-4">
         {/* Viewport Top Telemetry Strip */}
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between gap-2">
@@ -393,24 +401,27 @@ export function BioTwinBodyMap({
 
         {/* Center Viewport Body: Interactive 3D Organ Atlas or 2D Blueprint SVG */}
         {viewMode === "3d" ? (
-          <div className="relative my-2 flex-1 min-h-[460px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#070708] lg:min-h-0">
+          <div className="relative my-1.5 flex-1 min-h-[420px] sm:min-h-[480px] lg:min-h-0 w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#070708]">
             <BioTwin3DStage
               assessments={assessments}
               cascades={cascades}
               selectedSystem={selectedSystem}
               onSelectSystem={onSelectSystem}
+              onSelectSubStructure={onSelectSubStructure}
               vitals={vitals}
               envTelemetry={envTelemetry}
+              telemetryMode={telemetryMode}
+              hardwareSourceLabel={hardwareSourceLabel}
               visualMode={visualMode}
               autoRotate={autoRotate}
               cameraResetToken={cameraResetToken}
             />
           </div>
         ) : (
-          <div className="my-2 flex flex-1 items-center justify-center">
+          <div className="my-1.5 flex min-h-0 flex-1 items-center justify-center">
             <svg
               viewBox="0 0 420 440"
-              className="h-[420px] w-full max-w-[460px] sm:h-[520px]"
+              className="h-[380px] w-full max-w-[440px] sm:h-[460px] lg:h-full lg:max-h-full"
               role="img"
               aria-label="Interactive astronaut anatomical telemetry diagram"
             >

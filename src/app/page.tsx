@@ -1,20 +1,24 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
-  AlertTriangle,
   ArrowLeft,
-  ArrowUpRight,
+  BarChart3,
   CheckCircle2,
+  Cpu,
   ExternalLink,
+  ListChecks,
+  Minus,
+  Plus,
   Radio,
   RefreshCw,
-  Shield,
   Sun,
+  X,
 } from "lucide-react";
 import { AutonomousCmoPanel } from "@/components/AutonomousCmoPanel";
 import { BioTwinBodyMap } from "@/components/BioTwinBodyMap";
+import { HardwareBridgeDrawer } from "@/components/HardwareBridgeDrawer";
 import { PresentationView } from "@/components/PresentationView";
 import { RoutineGamificationBar } from "@/components/RoutineGamificationBar";
 import { TelemetryCharts } from "@/components/TelemetryCharts";
@@ -22,12 +26,18 @@ import { VitalsInputPanel } from "@/components/VitalsInputPanel";
 import {
   BASE_14_SOL_HISTORY,
   BODY_SYSTEM_METADATA,
+  CURATED_OSDR_STUDIES,
   DEFAULT_ROUTINE_TASKS,
   DEMO_SCENARIOS,
   MISSION_ENVIRONMENTS,
   NASA_HAZARDS,
 } from "@/data/nasaHrpData";
 import { PRESENTATION_SLIDES } from "@/data/presentationSlides";
+import { generateAstroskinTelemetryFrame } from "@/lib/biometricBridge";
+import {
+  fetchIssLiveSnapshot,
+  fetchOsdrStudyMetadata,
+} from "@/lib/issLiveTelemetry";
 import {
   applySpaceWeatherToTelemetry,
   fetchSpaceWeatherAlert,
@@ -40,14 +50,27 @@ import {
   saveRoutineProgress,
   toggleRoutineTask,
 } from "@/lib/routineStorage";
-import { clampVitalReadings, evaluateCrewHealth } from "@/lib/triageEngine";
+import { fuseTelemetryStreams } from "@/lib/telemetryMultiplexer";
+import {
+  applyCountermeasureToState,
+  clampVitalReadings,
+  evaluateCrewHealth,
+} from "@/lib/triageEngine";
 import type {
+  BiometricSourceType,
   BodySystemId,
+  CountermeasureActionSpec,
   EnvironmentTelemetry,
+  ExamStepFinding,
+  ExecutedActionLog,
+  IssLiveTelemetrySnapshot,
   MissionEnvironmentId,
   MissionScenario,
+  OsdrStudyLiveMetadata,
   RoutineProgressState,
   ScenarioId,
+  SelectedSubStructure,
+  TelemetryMode,
   TriageStatus,
   VitalReadings,
 } from "@/types/health";
@@ -66,13 +89,18 @@ const ENV_SHORT_LABEL: Record<MissionEnvironmentId, string> = {
   mars_base: "Mars Base",
 };
 
-const SYSTEM_ACCENT_HEX: Record<BodySystemId, string> = {
-  neuro_ocular: "#2dd4bf",
-  behavioral_circadian: "#818cf8",
-  cardiovascular: "#fb7185",
-  immune_hematology: "#c084fc",
-  metabolic_endocrine: "#f97316",
-  musculoskeletal_renal: "#4ade80",
+const SCENARIO_SHORT_LABEL: Record<ScenarioId, string> = {
+  nominal: "Nominal",
+  sans_co2_fluid_shift: "SANS + CO2",
+  renal_dehydration: "Renal Ca2+",
+  solar_storm: "X-Flare SPE",
+};
+
+const BIOMETRIC_SOURCE_LABEL: Record<BiometricSourceType, string> = {
+  astroskin_stream: "CSA ASTROSKIN 1HZ",
+  web_bluetooth: "WEB BLUETOOTH GATT",
+  webcam_rppg: "WEBCAM rPPG PULSE",
+  external_api: "CHP-IDA API INGEST",
 };
 
 const READINESS_STATUS: Record<
@@ -123,6 +151,45 @@ const OFFICIAL_CHALLENGE_LINKS = [
   },
 ];
 
+function MiniSparkline({
+  values,
+  strokeHex,
+}: {
+  values: number[];
+  strokeHex: string;
+}) {
+  if (values.length < 2) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const w = 68;
+  const h = 18;
+  const pts = values
+    .map((v, i) => {
+      const x = (i / (values.length - 1)) * w;
+      const y = h - 2 - ((v - min) / span) * (h - 4);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+
+  return (
+    <svg
+      viewBox={`0 0 ${w} ${h}`}
+      className="h-[18px] w-[58px] shrink-0 xl:w-[68px]"
+      aria-hidden="true"
+    >
+      <polyline
+        fill="none"
+        stroke={strokeHex}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        points={pts}
+      />
+    </svg>
+  );
+}
+
 export default function HomePage() {
   const initialScenario = DEMO_SCENARIOS[0];
 
@@ -132,12 +199,50 @@ export default function HomePage() {
   const [activeScenarioId, setActiveScenarioId] = useState<
     ScenarioId | "custom"
   >(initialScenario.id);
-  const [vitals, setVitals] = useState<VitalReadings>(initialScenario.vitals);
-  const [envTelemetry, setEnvTelemetry] = useState<EnvironmentTelemetry>(
+  const [telemetryMode, setTelemetryMode] = useState<TelemetryMode>("preset");
+  const [biometricSource, setBiometricSource] =
+    useState<BiometricSourceType>("astroskin_stream");
+
+  const [presetVitals, setPresetVitals] = useState<VitalReadings>(
+    initialScenario.vitals
+  );
+  const [presetEnv, setPresetEnv] = useState<EnvironmentTelemetry>(
     initialScenario.envTelemetry
   );
+
+  const [liveVitals, setLiveVitals] = useState<VitalReadings>(
+    initialScenario.vitals
+  );
+  const [liveEnv, setLiveEnv] = useState<EnvironmentTelemetry>(
+    MISSION_ENVIRONMENTS.iss_orbit.defaultTelemetry
+  );
+  const [countermeasureVitalsPatch, setCountermeasureVitalsPatch] = useState<
+    Partial<VitalReadings>
+  >({});
+  const [countermeasureEnvPatch, setCountermeasureEnvPatch] = useState<
+    Partial<EnvironmentTelemetry>
+  >({});
+
+  const [issSnapshot, setIssSnapshot] =
+    useState<IssLiveTelemetrySnapshot | null>(null);
+  const [isRefreshingIss, setIsRefreshingIss] = useState<boolean>(false);
+  const [osdrStudies, setOsdrStudies] = useState<OsdrStudyLiveMetadata[]>([
+    CURATED_OSDR_STUDIES["OSD-48"],
+    CURATED_OSDR_STUDIES["OSD-104"],
+    CURATED_OSDR_STUDIES["OSD-530"],
+  ]);
+  const [isRefreshingOsdr, setIsRefreshingOsdr] = useState<boolean>(false);
+
   const [selectedSystem, setSelectedSystem] = useState<BodySystemId>(
     initialScenario.focusSystem
+  );
+  const [selectedSubStructure, setSelectedSubStructure] =
+    useState<SelectedSubStructure | null>(null);
+  const [examFindings, setExamFindings] = useState<
+    Record<string, ExamStepFinding>
+  >({});
+  const [executedActions, setExecutedActions] = useState<ExecutedActionLog[]>(
+    []
   );
   const [routineProgress, setRoutineProgress] = useState<RoutineProgressState>(
     DEFAULT_ROUTINE_PROGRESS
@@ -150,10 +255,104 @@ export default function HomePage() {
     "presentation"
   );
   const [slideIndex, setSlideIndex] = useState<number>(0);
+  const [activeDrawer, setActiveDrawer] = useState<
+    "none" | "trends" | "routine" | "hardware"
+  >("none");
+  const astroTickRef = useRef<number>(0);
+
+  const refreshIssTelemetry = useCallback(async () => {
+    setIsRefreshingIss(true);
+    try {
+      const snap = await fetchIssLiveSnapshot({
+        tickSeed: astroTickRef.current,
+      });
+      setIssSnapshot(snap);
+      setLiveEnv((prev) =>
+        spaceWeather
+          ? applySpaceWeatherToTelemetry(snap.mappedEnvTelemetry, spaceWeather)
+          : {
+              ...snap.mappedEnvTelemetry,
+              solarFlareClass: prev.solarFlareClass,
+            }
+      );
+    } finally {
+      setIsRefreshingIss(false);
+    }
+  }, [spaceWeather]);
+
+  const refreshOsdrStudies = useCallback(async () => {
+    setIsRefreshingOsdr(true);
+    try {
+      const results = await Promise.all([
+        fetchOsdrStudyMetadata("OSD-48"),
+        fetchOsdrStudyMetadata("OSD-104"),
+        fetchOsdrStudyMetadata("OSD-530"),
+      ]);
+      setOsdrStudies(results);
+    } finally {
+      setIsRefreshingOsdr(false);
+    }
+  }, []);
 
   useEffect(() => {
     setRoutineProgress(loadRoutineProgress());
-  }, []);
+    void refreshIssTelemetry();
+  }, [refreshIssTelemetry]);
+
+  useEffect(() => {
+    if (telemetryMode === "preset") return;
+    if (biometricSource !== "astroskin_stream") return;
+
+    const timer = setInterval(() => {
+      astroTickRef.current += 1;
+      setLiveVitals((prev) =>
+        generateAstroskinTelemetryFrame(initialScenario.vitals, astroTickRef.current)
+      );
+      if (astroTickRef.current % 10 === 0) {
+        void refreshIssTelemetry();
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [telemetryMode, biometricSource, initialScenario.vitals, refreshIssTelemetry]);
+
+  useEffect(() => {
+    if (activeDrawer === "none") return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setActiveDrawer("none");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeDrawer]);
+
+  const multiplexed = useMemo(
+    () =>
+      fuseTelemetryStreams({
+        mode: telemetryMode,
+        envId,
+        activeScenarioId,
+        presetVitals,
+        presetEnv,
+        liveVitals,
+        liveEnv,
+        countermeasureVitalsPatch,
+        countermeasureEnvPatch,
+      }),
+    [
+      telemetryMode,
+      envId,
+      activeScenarioId,
+      presetVitals,
+      presetEnv,
+      liveVitals,
+      liveEnv,
+      countermeasureVitalsPatch,
+      countermeasureEnvPatch,
+    ]
+  );
+
+  const vitals = multiplexed.vitals;
+  const envTelemetry = multiplexed.envTelemetry;
 
   const evaluation = useMemo(
     () => evaluateCrewHealth(vitals, envTelemetry, envId),
@@ -162,57 +361,161 @@ export default function HomePage() {
 
   const envConfig = MISSION_ENVIRONMENTS[envId];
   const readinessStyle = READINESS_STATUS[evaluation.overallStatus];
-  const selectedMeta = BODY_SYSTEM_METADATA[selectedSystem];
-  const activeScenario = DEMO_SCENARIOS.find((s) => s.id === activeScenarioId);
+  const history = BASE_14_SOL_HISTORY[envId];
+
+  function handleSelectSystem(nextSystem: BodySystemId) {
+    setSelectedSystem(nextSystem);
+    setSelectedSubStructure((prev) =>
+      prev && prev.systemId === nextSystem ? prev : null
+    );
+  }
 
   function handleSelectEnvironment(nextEnvId: MissionEnvironmentId) {
     setEnvId(nextEnvId);
-    setActiveScenarioId("custom");
-    const defaultEnvTelemetry = MISSION_ENVIRONMENTS[nextEnvId].defaultTelemetry;
-    setEnvTelemetry(
-      spaceWeather
-        ? applySpaceWeatherToTelemetry(defaultEnvTelemetry, spaceWeather)
-        : defaultEnvTelemetry
-    );
+    if (telemetryMode === "preset") {
+      setActiveScenarioId("custom");
+      const defaultEnvTelemetry = MISSION_ENVIRONMENTS[nextEnvId].defaultTelemetry;
+      setPresetEnv(
+        spaceWeather
+          ? applySpaceWeatherToTelemetry(defaultEnvTelemetry, spaceWeather)
+          : defaultEnvTelemetry
+      );
+    }
   }
 
   function handleSelectScenario(scenario: MissionScenario) {
     setActiveScenarioId(scenario.id);
     setEnvId(scenario.environmentId);
-    setVitals(scenario.vitals);
-    setEnvTelemetry(scenario.envTelemetry);
+    setPresetVitals(scenario.vitals);
+    setPresetEnv(scenario.envTelemetry);
+    setCountermeasureVitalsPatch({});
+    setCountermeasureEnvPatch({});
     setSelectedSystem(scenario.focusSystem);
+    setSelectedSubStructure(null);
+    setExamFindings({});
+    setExecutedActions([]);
   }
 
   function handleUpdateVitals(patch: Partial<VitalReadings>) {
-    setActiveScenarioId("custom");
-    setVitals((prev) => clampVitalReadings({ ...prev, ...patch }));
+    if (telemetryMode === "preset") {
+      setActiveScenarioId("custom");
+      setPresetVitals((prev) => clampVitalReadings({ ...prev, ...patch }));
+    } else {
+      setLiveVitals((prev) => clampVitalReadings({ ...prev, ...patch }));
+    }
   }
 
   function handleUpdateEnvTelemetry(patch: Partial<EnvironmentTelemetry>) {
-    setActiveScenarioId("custom");
-    setEnvTelemetry((prev) => ({ ...prev, ...patch }));
+    if (telemetryMode === "preset") {
+      setActiveScenarioId("custom");
+      setPresetEnv((prev) => ({ ...prev, ...patch }));
+    } else {
+      setLiveEnv((prev) => ({ ...prev, ...patch }));
+    }
+  }
+
+  function handleLiveBiometricPatch(patch: Partial<VitalReadings>) {
+    setLiveVitals((prev) => clampVitalReadings({ ...prev, ...patch }));
+  }
+
+  function handleChangeTelemetryMode(nextMode: TelemetryMode) {
+    setTelemetryMode(nextMode);
+    setCountermeasureVitalsPatch({});
+    setCountermeasureEnvPatch({});
+  }
+
+  function handleUpdateExamFinding(stepKey: string, finding: ExamStepFinding) {
+    setExamFindings((prev) => ({
+      ...prev,
+      [stepKey]: finding,
+    }));
+  }
+
+  function handleResetSystemExam(systemId: BodySystemId) {
+    setExamFindings((prev) => {
+      const next = { ...prev };
+      for (const step of BODY_SYSTEM_METADATA[systemId].selfExamSteps) {
+        delete next[`${systemId}-${step.stepNumber}`];
+      }
+      return next;
+    });
+  }
+
+  function handleExecuteCountermeasure(action: CountermeasureActionSpec) {
+    if (telemetryMode === "preset") {
+      const next = applyCountermeasureToState(vitals, envTelemetry, action);
+      setActiveScenarioId("custom");
+      setPresetVitals(next.vitals);
+      setPresetEnv(next.envTelemetry);
+    } else {
+      if (action.vitalsPatch) {
+        setCountermeasureVitalsPatch((prev) => ({
+          ...prev,
+          ...action.vitalsPatch,
+        }));
+      }
+      if (action.envPatch) {
+        setCountermeasureEnvPatch((prev) => ({
+          ...prev,
+          ...action.envPatch,
+        }));
+      }
+    }
+
+    const now = new Date();
+    const utc = `${String(now.getUTCHours()).padStart(2, "0")}:${String(
+      now.getUTCMinutes()
+    ).padStart(2, "0")} UTC`;
+
+    setExecutedActions((prev) => [
+      ...prev,
+      {
+        id: `${action.id}-${now.getTime()}`,
+        actionId: action.id,
+        systemId: action.systemId,
+        label: action.label,
+        deltaSummary: action.deltaSummary,
+        timestamp: utc,
+      },
+    ]);
+
+    if (action.routineTaskId) {
+      setRoutineProgress((prev) => {
+        if (prev.completedTaskIds.includes(action.routineTaskId!)) {
+          return prev;
+        }
+        const updated = toggleRoutineTask(
+          prev,
+          action.routineTaskId!,
+          DEFAULT_ROUTINE_TASKS
+        );
+        saveRoutineProgress(updated);
+        return updated;
+      });
+    }
   }
 
   async function handleSyncSpaceWeather() {
-    if (isSyncingWeather) {
-      return;
-    }
+    if (isSyncingWeather) return;
     setIsSyncingWeather(true);
     try {
       const weather = await fetchSpaceWeatherAlert();
       setSpaceWeather(weather);
-      setActiveScenarioId("custom");
-      setEnvTelemetry((prev) =>
-        applySpaceWeatherToTelemetry(
-          {
-            ...prev,
-            dailyRadiationMsv: envConfig.defaultTelemetry.dailyRadiationMsv,
-            saaOrSpeDoseMsv: envConfig.defaultTelemetry.saaOrSpeDoseMsv,
-          },
-          weather
-        )
-      );
+      if (telemetryMode === "preset") {
+        setActiveScenarioId("custom");
+        setPresetEnv((prev) =>
+          applySpaceWeatherToTelemetry(
+            {
+              ...prev,
+              dailyRadiationMsv: envConfig.defaultTelemetry.dailyRadiationMsv,
+              saaOrSpeDoseMsv: envConfig.defaultTelemetry.saaOrSpeDoseMsv,
+            },
+            weather
+          )
+        );
+      } else {
+        setLiveEnv((prev) => applySpaceWeatherToTelemetry(prev, weather));
+      }
     } finally {
       setIsSyncingWeather(false);
     }
@@ -236,12 +539,15 @@ export default function HomePage() {
     const slide = PRESENTATION_SLIDES[nextIndex];
     if (!slide) return;
     setSlideIndex(nextIndex);
+    setTelemetryMode("preset");
     const scenario = DEMO_SCENARIOS.find((s) => s.id === slide.scenarioId);
     if (scenario) {
       setActiveScenarioId(scenario.id);
       setEnvId(scenario.environmentId);
-      setVitals(scenario.vitals);
-      setEnvTelemetry(scenario.envTelemetry);
+      setPresetVitals(scenario.vitals);
+      setPresetEnv(scenario.envTelemetry);
+      setCountermeasureVitalsPatch({});
+      setCountermeasureEnvPatch({});
     }
     setSelectedSystem(slide.focusSystem);
   }
@@ -264,78 +570,333 @@ export default function HomePage() {
     );
   }
 
+  const telemetryStripChannels: Array<{
+    id: string;
+    label: string;
+    valueDisplay: string;
+    targetLabel: string;
+    status: TriageStatus;
+    sparkValues: number[];
+    strokeHex: string;
+    focusSystem: BodySystemId;
+    onStep: (dir: -1 | 1) => void;
+  }> = [
+    {
+      id: "hr",
+      label: "Heart Rate",
+      valueDisplay: `${vitals.heartRateBpm} bpm`,
+      targetLabel: "52–88",
+      status:
+        vitals.heartRateBpm > 102 || vitals.heartRateBpm < 45
+          ? "red"
+          : vitals.heartRateBpm > 88 || vitals.heartRateBpm < 50
+          ? "amber"
+          : "green",
+      sparkValues: [...history.map((p) => p.heartRateBpm), vitals.heartRateBpm],
+      strokeHex: "#fb7185",
+      focusSystem: "cardiovascular",
+      onStep: (dir) =>
+        handleUpdateVitals({ heartRateBpm: vitals.heartRateBpm + dir * 4 }),
+    },
+    {
+      id: "bp",
+      label: "BP mmHg",
+      valueDisplay: `${vitals.bloodPressureSystolic}/${vitals.bloodPressureDiastolic}`,
+      targetLabel: "<130/85",
+      status:
+        vitals.bloodPressureSystolic >= 140 ||
+        vitals.bloodPressureDiastolic >= 90
+          ? "red"
+          : vitals.bloodPressureSystolic >= 130 ||
+            vitals.bloodPressureDiastolic >= 85
+          ? "amber"
+          : "green",
+      sparkValues: [
+        ...history.map((p) => p.systolicBp),
+        vitals.bloodPressureSystolic,
+      ],
+      strokeHex: "#f43f5e",
+      focusSystem: envConfig.gravityG === 0 ? "neuro_ocular" : "cardiovascular",
+      onStep: (dir) =>
+        handleUpdateVitals({
+          bloodPressureSystolic: vitals.bloodPressureSystolic + dir * 4,
+          bloodPressureDiastolic: vitals.bloodPressureDiastolic + dir * 2,
+        }),
+    },
+    {
+      id: "co2",
+      label: "Cabin pCO2",
+      valueDisplay: `${envTelemetry.cabinCo2MmHg} mmHg`,
+      targetLabel: "<=3.0",
+      status:
+        envTelemetry.cabinCo2MmHg > 4.0
+          ? "red"
+          : envTelemetry.cabinCo2MmHg > 3.2
+          ? "amber"
+          : "green",
+      sparkValues: [
+        ...history.map((p) => p.issCabinCo2MmHg),
+        envTelemetry.cabinCo2MmHg,
+      ],
+      strokeHex: "#2dd4bf",
+      focusSystem: "neuro_ocular",
+      onStep: (dir) =>
+        handleUpdateEnvTelemetry({
+          cabinCo2MmHg: Number(
+            Math.max(
+              0.3,
+              Math.min(8.0, envTelemetry.cabinCo2MmHg + dir * 0.3)
+            ).toFixed(1)
+          ),
+        }),
+    },
+    {
+      id: "rad",
+      label: "RadLab",
+      valueDisplay: `${envTelemetry.dailyRadiationMsv} mSv`,
+      targetLabel:
+        envTelemetry.solarFlareClass !== "None"
+          ? `Flare ${envTelemetry.solarFlareClass}`
+          : "<1.2/d",
+      status:
+        envTelemetry.solarFlareClass === "X" ||
+        envTelemetry.dailyRadiationMsv >= 2.5
+          ? "red"
+          : envTelemetry.solarFlareClass === "M" ||
+            envTelemetry.dailyRadiationMsv > 1.2
+          ? "amber"
+          : "green",
+      sparkValues: [
+        ...history.map((p) => p.totalRadiationMsv),
+        envTelemetry.dailyRadiationMsv,
+      ],
+      strokeHex: "#c084fc",
+      focusSystem: "immune_hematology",
+      onStep: (dir) =>
+        handleUpdateEnvTelemetry({
+          dailyRadiationMsv: Number(
+            Math.max(
+              0.2,
+              Math.min(10.0, envTelemetry.dailyRadiationMsv + dir * 0.25)
+            ).toFixed(2)
+          ),
+        }),
+    },
+    {
+      id: "h2o",
+      label: "Hydration",
+      valueDisplay: `${vitals.hydrationMl} mL`,
+      targetLabel: ">=2400",
+      status:
+        vitals.hydrationMl < 1500
+          ? "red"
+          : vitals.hydrationMl < 2100
+          ? "amber"
+          : "green",
+      sparkValues: [
+        ...history.map((_, idx) => 2400 + ((idx % 3) - 1) * 90),
+        vitals.hydrationMl,
+      ],
+      strokeHex: "#4ade80",
+      focusSystem: "musculoskeletal_renal",
+      onStep: (dir) =>
+        handleUpdateVitals({ hydrationMl: vitals.hydrationMl + dir * 200 }),
+    },
+    {
+      id: "slp",
+      label: "Sleep",
+      valueDisplay: `${vitals.sleepHours} hrs`,
+      targetLabel: "6.5–8.0",
+      status:
+        vitals.sleepHours < 5.8
+          ? "red"
+          : vitals.sleepHours < 6.5
+          ? "amber"
+          : "green",
+      sparkValues: [...history.map((p) => p.sleepHours), vitals.sleepHours],
+      strokeHex: "#818cf8",
+      focusSystem: "behavioral_circadian",
+      onStep: (dir) =>
+        handleUpdateVitals({
+          sleepHours: Number((vitals.sleepHours + dir * 0.4).toFixed(1)),
+        }),
+    },
+  ];
+
+  const completedRoutineCount = routineProgress.completedTaskIds.length;
+
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white">
-      {/* Fixed Minimal Top Navbar (x.ai/bot style) */}
-      <header className="fixed inset-x-0 top-0 z-50 border-b border-white/[0.07] bg-[#0a0a0a]/85 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-6">
-          {/* Left Geometric ARES Mark */}
-          <a
-            href="#top"
-            className="flex shrink-0 items-center gap-2.5 text-sm font-semibold tracking-tight text-white"
-          >
-            <svg
-              viewBox="0 0 32 32"
-              className="h-6 w-6 text-white"
-              fill="none"
-              aria-hidden="true"
+    <div className="flex min-h-screen flex-col bg-[#07090e] text-white lg:h-dvh lg:overflow-hidden">
+      {/* ZONE A: Top Mission Status, Environment & 1-Click Scenario Bar */}
+      <header className="shrink-0 border-b border-white/[0.08] bg-[#0a0c12] px-3 py-1.5 lg:px-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 xl:flex-nowrap">
+          {/* Left: Brand Identity + Mission Environment Switcher */}
+          <div className="flex flex-wrap items-center gap-2 xl:flex-nowrap">
+            <div className="flex shrink-0 items-center gap-1.5 pr-0.5">
+              <svg
+                viewBox="0 0 32 32"
+                className="h-5 w-5 text-white"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M4 26L14.5 6H18.5L28 26H23.2L16.5 11.4L9.2 26H4Z"
+                  fill="currentColor"
+                />
+                <path
+                  d="M5 20.5C11.5 14 20.5 11 29 9.5"
+                  stroke="#0a0c12"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                />
+              </svg>
+              <span className="text-xs font-semibold tracking-wider text-white">
+                ARES-MED
+              </span>
+              <span className="hidden rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 font-mono text-[9.5px] text-[#8b909a] 2xl:inline-block">
+                SOL 42 · CMO
+              </span>
+            </div>
+
+            <nav
+              aria-label="Mission Environment Profile"
+              className="flex items-center gap-0.5 rounded-full border border-white/[0.08] bg-[#141414] p-0.5"
             >
-              <path
-                d="M4 26L14.5 6H18.5L28 26H23.2L16.5 11.4L9.2 26H4Z"
-                fill="currentColor"
-              />
-              <path
-                d="M5 20.5C11.5 14 20.5 11 29 9.5"
-                stroke="#0a0a0a"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-              />
-            </svg>
-            <span>ARES-MED</span>
-          </a>
+              {ENVIRONMENT_ORDER.map((id) => {
+                const env = MISSION_ENVIRONMENTS[id];
+                const active = envId === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => handleSelectEnvironment(id)}
+                    aria-pressed={active}
+                    className={`inline-flex min-h-[28px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[10.5px] font-medium transition ${
+                      active
+                        ? "bg-white text-[#0a0a0a]"
+                        : "text-[#8b909a] hover:text-white"
+                    }`}
+                  >
+                    <span>{ENV_SHORT_LABEL[id]}</span>
+                    {env.autonomousModeRequired && (
+                      <Radio
+                        className={`h-2.5 w-2.5 ${
+                          active ? "text-amber-600" : "text-amber-400"
+                        }`}
+                        aria-hidden="true"
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
 
-          {/* Center Environment Pill Tabs (Desktop) */}
-          <nav
-            aria-label="Mission Environment Profile"
-            className="hidden items-center gap-1 rounded-full border border-white/[0.08] bg-[#141414] p-1 lg:flex"
-          >
-            {ENVIRONMENT_ORDER.map((id) => {
-              const env = MISSION_ENVIRONMENTS[id];
-              const active = envId === id;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => handleSelectEnvironment(id)}
-                  aria-pressed={active}
-                  className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium transition ${
-                    active
-                      ? "bg-white text-[#0a0a0a]"
-                      : "text-[#7e828a] hover:text-white"
-                  }`}
-                >
-                  <span>{ENV_SHORT_LABEL[id]}</span>
-                  {env.autonomousModeRequired && (
-                    <Radio
-                      className={`h-3 w-3 ${
-                        active ? "text-amber-600" : "text-amber-400"
-                      }`}
-                      aria-hidden="true"
-                    />
-                  )}
-                </button>
-              );
-            })}
-          </nav>
+          {/* Center/Right: 1-Click Scenario Simulator + Drawers + Readiness */}
+          <div className="flex flex-wrap items-center gap-1.5 xl:flex-nowrap">
+            <div
+              role="group"
+              aria-label="Judge demo scenarios"
+              className="flex items-center gap-0.5 rounded-full border border-white/[0.08] bg-[#141414] p-0.5"
+            >
+              {DEMO_SCENARIOS.map((scenario) => {
+                const isSelected = activeScenarioId === scenario.id;
+                return (
+                  <button
+                    key={scenario.id}
+                    type="button"
+                    data-testid={`scenario-pill-${scenario.id}`}
+                    onClick={() => handleSelectScenario(scenario)}
+                    aria-pressed={isSelected}
+                    className={`min-h-[28px] cursor-pointer whitespace-nowrap rounded-full px-2 py-0.5 text-[10.5px] font-medium transition ${
+                      isSelected
+                        ? "bg-cyan-400 text-[#07090e] font-semibold"
+                        : "text-[#9ea3ae] hover:bg-white/[0.06] hover:text-white"
+                    }`}
+                  >
+                    {SCENARIO_SHORT_LABEL[scenario.id]}
+                  </button>
+                );
+              })}
+            </div>
 
-          {/* Right Action Pills: Presentation Mode, DONKI Sync & Crew Readiness */}
-          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              data-testid="open-hardware-drawer"
+              onClick={() =>
+                setActiveDrawer((prev) =>
+                  prev === "hardware" ? "none" : "hardware"
+                )
+              }
+              aria-expanded={activeDrawer === "hardware"}
+              className={`inline-flex min-h-[30px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-1 text-[10.5px] font-medium transition ${
+                activeDrawer === "hardware"
+                  ? "border-cyan-400 bg-cyan-500/20 text-cyan-200"
+                  : telemetryMode !== "preset"
+                  ? "border-emerald-400/50 bg-emerald-500/15 text-emerald-200"
+                  : "border-white/10 bg-[#141414] text-white hover:border-white/25"
+              }`}
+            >
+              <Cpu className="h-3 w-3 text-cyan-300" aria-hidden="true" />
+              <span>
+                {telemetryMode === "preset"
+                  ? "Live Bridge"
+                  : telemetryMode === "live_hardware"
+                  ? "Live HW"
+                  : "Hybrid"}
+              </span>
+              {telemetryMode !== "preset" && (
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              data-testid="open-trends-drawer"
+              onClick={() =>
+                setActiveDrawer((prev) =>
+                  prev === "trends" ? "none" : "trends"
+                )
+              }
+              aria-expanded={activeDrawer === "trends"}
+              className={`inline-flex min-h-[30px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-1 text-[10.5px] font-medium transition ${
+                activeDrawer === "trends"
+                  ? "border-cyan-400 bg-cyan-500/15 text-cyan-200"
+                  : "border-white/10 bg-[#141414] text-white hover:border-white/25"
+              }`}
+            >
+              <BarChart3 className="h-3 w-3 text-cyan-300" aria-hidden="true" />
+              <span className="hidden 2xl:inline">Simulator &amp; Charts</span>
+              <span className="2xl:hidden">Charts</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="open-routine-drawer"
+              onClick={() =>
+                setActiveDrawer((prev) =>
+                  prev === "routine" ? "none" : "routine"
+                )
+              }
+              aria-expanded={activeDrawer === "routine"}
+              className={`inline-flex min-h-[30px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-1 text-[10.5px] font-medium transition ${
+                activeDrawer === "routine"
+                  ? "border-emerald-400 bg-emerald-500/15 text-emerald-200"
+                  : "border-white/10 bg-[#141414] text-white hover:border-white/25"
+              }`}
+            >
+              <ListChecks className="h-3 w-3 text-emerald-300" aria-hidden="true" />
+              <span>
+                Routine {completedRoutineCount}/{DEFAULT_ROUTINE_TASKS.length}
+              </span>
+            </button>
+
             <button
               type="button"
               onClick={() => setSurfaceMode("presentation")}
-              className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-full border border-white/10 bg-[#1a1a1a] px-3.5 text-xs font-medium text-white transition hover:border-white/25 hover:bg-[#222222]"
+              className="inline-flex min-h-[30px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border border-white/10 bg-[#141414] px-2.5 py-1 text-[10.5px] font-medium text-white transition hover:border-white/25"
             >
-              <ArrowLeft className="h-3.5 w-3.5 text-[#7e828a]" aria-hidden="true" />
+              <ArrowLeft className="h-3 w-3 text-[#7e828a]" aria-hidden="true" />
               <span className="hidden sm:inline">Presentation</span>
             </button>
 
@@ -343,448 +904,308 @@ export default function HomePage() {
               type="button"
               onClick={handleSyncSpaceWeather}
               disabled={isSyncingWeather}
-              className="inline-flex h-9 items-center gap-1.5 rounded-full border border-white/10 bg-[#1a1a1a] px-3.5 text-xs font-medium text-white transition hover:border-white/25 hover:bg-[#222222] disabled:opacity-60"
+              title={spaceWeather?.summary ?? "Sync live NASA DONKI space weather"}
+              className="inline-flex min-h-[30px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border border-white/10 bg-[#141414] px-2.5 py-1 text-[10.5px] font-medium text-white transition hover:border-white/25 disabled:opacity-60"
             >
               <RefreshCw
-                className={`h-3.5 w-3.5 text-[#7e828a] ${
+                className={`h-3 w-3 text-[#8b909a] ${
                   isSyncingWeather ? "animate-spin" : ""
                 }`}
                 aria-hidden="true"
               />
-              <span className="hidden sm:inline">
-                {isSyncingWeather ? "Syncing DONKI..." : "Sync Live NASA DONKI"}
-              </span>
-              <span className="sm:hidden">DONKI</span>
+              <span>{isSyncingWeather ? "Sync..." : "DONKI"}</span>
+              {spaceWeather && (
+                <Sun
+                  className={`h-3 w-3 ${
+                    spaceWeather.isFallback
+                      ? "text-amber-300"
+                      : "text-emerald-300"
+                  }`}
+                  aria-hidden="true"
+                />
+              )}
             </button>
 
-            <a
-              href="#biotwin-console"
-              className={`inline-flex h-9 items-center gap-2 rounded-full px-3.5 text-xs font-medium transition hover:opacity-95 ${readinessStyle.badgeClass}`}
+            <div
+              data-testid="readiness-badge"
+              className={`inline-flex min-h-[30px] items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium ${readinessStyle.badgeClass}`}
             >
               <span
                 className={`h-2 w-2 rounded-full ${readinessStyle.dotClass}`}
               />
-              <span>Readiness</span>
+              <span className="hidden 2xl:inline">Readiness</span>
               <span className="font-mono font-semibold tabular-nums">
                 {evaluation.readinessScore}/100
               </span>
-            </a>
+            </div>
           </div>
         </div>
       </header>
 
-      {/* Main Content Flow */}
-      <main id="top" className="pt-24 sm:pt-28">
-        {/* Hero Section */}
-        <section className="mx-auto max-w-[1360px] px-4 text-center sm:px-6">
-          {/* Launch Kicker Pill */}
-          <a
-            href="#citations"
-            className="group inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-[#1a1a1a]/70 py-1.5 pr-2 pl-3.5 text-xs font-medium transition hover:border-white/20 hover:bg-[#1a1a1a] sm:text-sm"
-          >
-            <span className="text-white">NASA Space Apps 2026</span>
-            <span className="hidden text-[#7e828a] sm:inline">
-              Autonomous Space Medicine Console
-            </span>
-            <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/10 text-white transition group-hover:bg-white group-hover:text-[#0a0a0a]">
-              <ArrowUpRight className="h-3 w-3" aria-hidden="true" />
-            </span>
-          </a>
-
-          {/* Editorial H1 with Inline Geometric BioTwin Mark */}
-          <h1 className="mx-auto mt-5 max-w-4xl text-4xl font-medium leading-[1.05] tracking-tight text-white text-balance sm:text-5xl lg:text-6xl">
-            Meet
-            <span
-              className="mx-2.5 inline-flex -translate-y-[0.06em] align-middle"
-              aria-hidden="true"
-            >
-              <svg
-                viewBox="0 0 92 92"
-                className="h-[0.92em] w-[0.92em]"
-                fill="none"
-              >
-                <rect width="92" height="92" rx="46" fill="#ffffff" />
-                <g transform="rotate(-10 46 46)">
-                  <rect
-                    x="30"
-                    y="30"
-                    width="11"
-                    height="24"
-                    rx="5.5"
-                    fill="#0a0a0a"
-                  />
-                  <rect
-                    x="51"
-                    y="30"
-                    width="11"
-                    height="24"
-                    rx="5.5"
-                    fill="#0a0a0a"
-                  />
-                </g>
-              </svg>
-            </span>
-            ARES-MED
-          </h1>
-
-          {/* Subtitle */}
-          <p className="mx-auto mt-5 max-w-2xl text-base leading-relaxed text-[#7e828a] text-balance sm:text-lg lg:text-xl">
-            Autonomous medical triage for deep-space crews. Live multi-organ
-            physiological cascades, Earth-vs-Space baselines, and guided CMO
-            protocols.
-          </p>
-
-          {/* Mobile/Tablet Environment Selector */}
-          <div className="mx-auto mt-6 flex flex-wrap items-center justify-center gap-1.5 lg:hidden">
-            {ENVIRONMENT_ORDER.map((id) => {
-              const active = envId === id;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => handleSelectEnvironment(id)}
-                  aria-pressed={active}
-                  className={`rounded-full px-3.5 py-1.5 text-xs font-medium transition ${
-                    active
-                      ? "bg-white text-[#0a0a0a]"
-                      : "border border-white/10 bg-[#1a1a1a] text-[#7e828a] hover:text-white"
-                  }`}
-                >
-                  {ENV_SHORT_LABEL[id]}
-                </button>
-              );
-            })}
+      {/* ZONE B: Full-Viewport Center 2-Column Console */}
+      <main className="min-h-0 flex-1 overflow-y-auto p-2.5 lg:overflow-hidden lg:p-3">
+        <div className="grid grid-cols-1 gap-2.5 lg:h-full lg:grid-cols-12">
+          <div className="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#141414] lg:col-span-7 lg:h-full xl:col-span-8">
+            <BioTwinBodyMap
+              assessments={evaluation.systems}
+              cascades={evaluation.activeCascades}
+              selectedSystem={selectedSystem}
+              onSelectSystem={handleSelectSystem}
+              onSelectSubStructure={setSelectedSubStructure}
+              vitals={vitals}
+              envTelemetry={envTelemetry}
+              telemetryMode={telemetryMode}
+              hardwareSourceLabel={`${BIOMETRIC_SOURCE_LABEL[biometricSource]} / ISS ETHOS`}
+            />
           </div>
 
-          {/* 4 One-Click Judge Demo Scenario Pills */}
-          <div className="mt-8 flex flex-wrap items-center justify-center gap-2">
-            {DEMO_SCENARIOS.map((scenario) => {
-              const isSelected = activeScenarioId === scenario.id;
-              return (
-                <button
-                  key={scenario.id}
-                  type="button"
-                  onClick={() => handleSelectScenario(scenario)}
-                  aria-pressed={isSelected}
-                  className={`inline-flex h-10 items-center gap-2 rounded-full px-4 text-xs font-medium transition active:scale-[0.98] ${
-                    isSelected
-                      ? "bg-white text-[#0a0a0a] hover:bg-[#f5f4f0]"
-                      : "border border-white/10 bg-[#1a1a1a] text-white hover:border-white/25 hover:bg-[#222222]"
-                  }`}
-                >
-                  <span>{scenario.name}</span>
-                  <span
-                    className={`hidden rounded-full px-2 py-0.5 font-mono text-[10px] xl:inline-block ${
-                      isSelected
-                        ? "bg-[#0a0a0a]/10 text-[#0a0a0a]"
-                        : "bg-white/[0.06] text-[#7e828a]"
-                    }`}
-                  >
-                    {scenario.badge}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Active Scenario + Live Space Weather Telemetry Caption */}
-          <div className="mx-auto mt-4 flex flex-wrap items-center justify-center gap-2 text-xs text-[#7e828a]">
-            <span>
-              {activeScenario
-                ? activeScenario.description
-                : `${envConfig.name} · ${envConfig.subtitle}`}
-            </span>
-            {spaceWeather && (
-              <span
-                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 font-mono text-[10px] ${
-                  spaceWeather.isFallback
-                    ? "border-amber-500/25 bg-amber-500/10 text-amber-300"
-                    : "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
-                }`}
-              >
-                <Sun className="h-3 w-3" aria-hidden="true" />
-                {spaceWeather.isFallback ? "OSDR RadLab Fallback" : "Live DONKI"}
-                {" · "}
-                {spaceWeather.summary}
-              </span>
-            )}
-          </div>
-        </section>
-
-        {/* Centerpiece x.ai/bot macOS Desktop Window Frame */}
-        <section
-          id="biotwin-console"
-          className="mx-auto mt-10 max-w-[1440px] px-4 sm:mt-12 sm:px-6"
-        >
-          <div className="overflow-hidden rounded-[20px] border border-white/10 bg-[#141414] shadow-2xl">
-            {/* macOS Window Title Bar */}
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] bg-[#141414] px-4 py-3">
-              {/* Traffic Light Dots */}
-              <div className="flex items-center gap-2">
-                <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
-                <span className="h-3 w-3 rounded-full bg-[#ffbd2e]" />
-                <span className="h-3 w-3 rounded-full bg-[#28c840]" />
-                <span className="ml-2 hidden font-mono text-[11px] text-[#7e828a] sm:inline">
-                  {envConfig.name} · {envConfig.gravityLabel}
-                </span>
-              </div>
-
-              {/* Centered Active System Pill */}
-              <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-[#202020] px-3.5 py-1 text-xs font-medium text-white">
-                <span
-                  className="h-2 w-2 rounded-full"
-                  style={{
-                    backgroundColor: SYSTEM_ACCENT_HEX[selectedSystem],
-                  }}
-                />
-                <span>{selectedMeta.name}</span>
-                <span className="hidden font-mono text-[10px] text-[#7e828a] sm:inline">
-                  · {envConfig.commDelayLabel}
-                </span>
-              </div>
-
-              {/* Right Active NASA HRP Hazard Pills */}
-              <div className="hidden items-center gap-1.5 xl:flex">
-                <Shield
-                  className="mr-1 h-3.5 w-3.5 text-[#7e828a]"
-                  aria-hidden="true"
-                />
-                {envConfig.activeHazards.slice(0, 4).map((hazardId) => {
-                  const hazard = NASA_HAZARDS[hazardId];
-                  const weight = envConfig.hazardWeights[hazardId];
-                  return (
-                    <a
-                      key={hazardId}
-                      href={hazard.referenceUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title={hazard.description}
-                      className="inline-flex items-center gap-1 rounded-full border border-white/[0.08] bg-[#1b1b1b] px-2.5 py-0.5 text-[10px] font-medium text-[#7e828a] transition hover:border-white/25 hover:text-white"
-                    >
-                      <span>{hazard.shortLabel}</span>
-                      <span className="font-mono text-white">
-                        ×{weight.toFixed(1)}
-                      </span>
-                    </a>
-                  );
-                })}
-              </div>
-
-              {/* Compact Cascade Status Pill on smaller viewports */}
-              <div className="flex items-center xl:hidden">
-                {evaluation.activeCascades.length === 0 ? (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-medium text-emerald-300">
-                    <CheckCircle2 className="h-3 w-3" aria-hidden="true" />0
-                    Cascades
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-medium text-amber-300">
-                    <AlertTriangle className="h-3 w-3" aria-hidden="true" />
-                    {evaluation.activeCascades.length} Cascade
-                    {evaluation.activeCascades.length > 1 ? "s" : ""}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Window Interior: BioTwin Sidebar + Anatomical Viewport (7 cols) + Autonomous CMO (5 cols) */}
-            <div className="grid grid-cols-1 lg:grid-cols-12">
-              <div className="lg:col-span-7">
-                <BioTwinBodyMap
-                  assessments={evaluation.systems}
-                  cascades={evaluation.activeCascades}
-                  selectedSystem={selectedSystem}
-                  onSelectSystem={setSelectedSystem}
-                  vitals={vitals}
-                  envTelemetry={envTelemetry}
-                />
-              </div>
-
-              <div className="lg:col-span-5">
-                <AutonomousCmoPanel
-                  selectedSystem={selectedSystem}
-                  evaluation={evaluation}
-                  vitals={vitals}
-                  envTelemetry={envTelemetry}
-                  envId={envId}
-                />
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Bento Telemetry Section (x.ai/bot Section 3 Layout) */}
-        <section className="mx-auto mt-20 max-w-[1440px] px-4 sm:mt-24 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <h2 className="text-3xl font-medium tracking-tight text-white text-balance sm:text-4xl lg:text-5xl">
-              Real-time physiological &amp; habitat telemetry
-            </h2>
-            <p className="mt-3 text-base text-[#7e828a] text-balance sm:text-lg">
-              Adjust astronaut vitals and closed-habitat sensor feeds to observe
-              live cascade propagation across 14 Sols.
-            </p>
-          </div>
-
-          <div className="mt-10 grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <VitalsInputPanel
+          <div className="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#141414] lg:col-span-5 lg:h-full xl:col-span-4">
+            <AutonomousCmoPanel
+              selectedSystem={selectedSystem}
+              evaluation={evaluation}
               vitals={vitals}
               envTelemetry={envTelemetry}
               envId={envId}
-              onUpdateVitals={handleUpdateVitals}
-              onUpdateEnvTelemetry={handleUpdateEnvTelemetry}
+              selectedSubStructure={selectedSubStructure}
+              onClearSubStructure={() => setSelectedSubStructure(null)}
+              onExecuteCountermeasure={handleExecuteCountermeasure}
+              executedActions={executedActions}
+              onOcularFindingChange={(ocularFinding) =>
+                handleUpdateVitals({ ocularFinding })
+              }
+              examFindings={examFindings}
+              onUpdateExamFinding={handleUpdateExamFinding}
+              onResetSystemExam={handleResetSystemExam}
+              telemetryMode={telemetryMode}
+              biometricSource={biometricSource}
+              issSnapshot={issSnapshot}
             />
-
-            <TelemetryCharts
-              history={BASE_14_SOL_HISTORY[envId]}
-              currentVitals={vitals}
-              currentEnvTelemetry={envTelemetry}
-              envId={envId}
-            />
-          </div>
-        </section>
-
-        {/* Countermeasure Routine Section */}
-        <section className="mx-auto mt-10 max-w-[1440px] px-4 sm:mt-12 sm:px-6">
-          <RoutineGamificationBar
-            tasks={DEFAULT_ROUTINE_TASKS}
-            progress={routineProgress}
-            onToggleTask={handleToggleRoutineTask}
-            onResetDay={handleResetRoutineDay}
-            onSelectSystem={setSelectedSystem}
-          />
-        </section>
-
-        {/* Bottom CTA & Signature x.ai/bot Concentric Orbital Hairline Graphic */}
-        <section className="relative mx-auto mt-24 overflow-hidden pt-12 text-center">
-          <div className="relative z-10 mx-auto max-w-2xl px-4 sm:px-6">
-            <h2 className="text-3xl font-medium tracking-tight text-white text-balance sm:text-4xl lg:text-5xl">
-              Autonomous readiness for every horizon
-            </h2>
-            <p className="mt-3 text-base text-[#7e828a] text-balance sm:text-lg">
-              Built on NASA Human Research Program risks, OSDR environmental
-              studies, and CSA space-radiation dosimetry.
-            </p>
-            <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
-              <button
-                type="button"
-                onClick={handleSyncSpaceWeather}
-                disabled={isSyncingWeather}
-                className="inline-flex h-11 items-center gap-2 rounded-full bg-white px-6 text-sm font-medium text-[#0a0a0a] transition hover:bg-[#f5f4f0] active:scale-[0.98] disabled:opacity-60"
-              >
-                <RefreshCw
-                  className={`h-4 w-4 ${isSyncingWeather ? "animate-spin" : ""}`}
-                  aria-hidden="true"
-                />
-                {isSyncingWeather
-                  ? "Syncing Live NASA DONKI..."
-                  : "Sync Live NASA DONKI"}
-              </button>
-              <a
-                href="#biotwin-console"
-                className="inline-flex h-11 items-center gap-2 rounded-full border border-white/10 bg-[#1a1a1a] px-6 text-sm font-medium text-white transition hover:border-white/25 hover:bg-[#222222]"
-              >
-                Return to BioTwin Console
-              </a>
-            </div>
-          </div>
-
-          {/* Giant Concentric Hairline Orbital Graphic (x.ai/bot bottom hero motif) */}
-          <div
-            className="pointer-events-none relative mx-auto -mt-4 h-[210px] w-full max-w-[1200px] sm:h-[270px]"
-            aria-hidden="true"
-          >
-            <svg
-              viewBox="0 0 1200 320"
-              className="h-full w-full"
-              fill="none"
-              preserveAspectRatio="xMidYMin slice"
-            >
-              <circle
-                cx="600"
-                cy="420"
-                r="380"
-                stroke="rgba(255,255,255,0.12)"
-                strokeWidth="1"
-              />
-              <circle
-                cx="600"
-                cy="420"
-                r="310"
-                stroke="rgba(255,255,255,0.08)"
-                strokeWidth="1"
-              />
-              <circle
-                cx="600"
-                cy="420"
-                r="230"
-                stroke="rgba(255,255,255,0.06)"
-                strokeWidth="1"
-              />
-              {/* Tilted Geometric BioTwin Eye Cutouts */}
-              <g transform="rotate(-12 600 280)">
-                <rect
-                  x="522"
-                  y="210"
-                  width="44"
-                  height="112"
-                  rx="22"
-                  stroke="rgba(255,255,255,0.12)"
-                  strokeWidth="1"
-                />
-                <rect
-                  x="612"
-                  y="202"
-                  width="44"
-                  height="112"
-                  rx="22"
-                  stroke="rgba(255,255,255,0.12)"
-                  strokeWidth="1"
-                />
-              </g>
-            </svg>
-            <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-[#0a0a0a] to-transparent" />
-          </div>
-        </section>
-      </main>
-
-      {/* Scientific Citations Footer */}
-      <footer
-        id="citations"
-        className="border-t border-white/[0.07] bg-[#0a0a0a] py-10 text-xs text-[#7e828a]"
-      >
-        <div className="mx-auto max-w-[1440px] px-4 sm:px-6">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-2 font-medium text-white">
-              <Activity className="h-4 w-4 text-[#7e828a]" aria-hidden="true" />
-              <span>
-                Scientific Reference &amp; Open-Data Citations (NASA HRP · OSDR
-                · CSA · DONKI)
-              </span>
-            </div>
-            <span className="font-mono text-[11px] text-[#7e828a]">
-              MIT License · Open-Source Prototype (NASA Space Apps Almaty 2026)
-            </span>
-          </div>
-
-          <div className="mt-5 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-            {OFFICIAL_CHALLENGE_LINKS.map((link) => (
-              <a
-                key={link.url}
-                href={link.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center justify-between gap-2 rounded-2xl border border-white/[0.07] bg-[#141414] px-4 py-3 text-xs text-[#7e828a] transition hover:border-white/20 hover:text-white"
-              >
-                <span className="truncate">{link.label}</span>
-                <ExternalLink
-                  className="h-3.5 w-3.5 shrink-0 text-[#7e828a]"
-                  aria-hidden="true"
-                />
-              </a>
-            ))}
           </div>
         </div>
+      </main>
+
+      {/* ZONE C: Persistent 6-Channel Bottom Telemetry Dock */}
+      <footer
+        aria-label="Live physiological and environmental telemetry strip"
+        className="shrink-0 border-t border-white/[0.08] bg-[#0a0c12] px-3 py-1.5 lg:px-4"
+      >
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          {telemetryStripChannels.map((ch) => {
+            const isSelected = selectedSystem === ch.focusSystem;
+            const dotColor =
+              ch.status === "red"
+                ? "bg-rose-400"
+                : ch.status === "amber"
+                ? "bg-amber-400"
+                : "bg-emerald-400";
+
+            return (
+              <div
+                key={ch.id}
+                onClick={() => handleSelectSystem(ch.focusSystem)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handleSelectSystem(ch.focusSystem);
+                  }
+                }}
+                className={`flex min-w-0 cursor-pointer flex-col justify-between rounded-xl border px-2.5 py-1.5 transition ${
+                  isSelected
+                    ? "border-white/25 bg-[#161a23]"
+                    : "border-white/[0.07] bg-[#11131a] hover:border-white/20"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-1.5">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`} />
+                    <span className="truncate text-[10px] font-medium uppercase tracking-wider text-[#8b909a]">
+                      {ch.label}
+                    </span>
+                  </div>
+                  <span className="shrink-0 whitespace-nowrap font-mono text-xs font-semibold tabular-nums text-white">
+                    {ch.valueDisplay}
+                  </span>
+                </div>
+
+                <div className="mt-1 flex items-center justify-between gap-1.5">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <MiniSparkline
+                      values={ch.sparkValues}
+                      strokeHex={ch.strokeHex}
+                    />
+                    <span className="hidden truncate font-mono text-[9px] text-[#6d727e] 2xl:inline">
+                      {ch.targetLabel}
+                    </span>
+                  </div>
+
+                  <div
+                    className="flex shrink-0 items-center gap-0.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => ch.onStep(-1)}
+                      aria-label={`Decrease ${ch.label}`}
+                      className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md border border-white/10 bg-[#1a1d26] text-[#9ea3ae] transition hover:border-white/25 hover:text-white"
+                    >
+                      <Minus className="h-2.5 w-2.5" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => ch.onStep(1)}
+                      aria-label={`Increase ${ch.label}`}
+                      className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md border border-white/10 bg-[#1a1d26] text-[#9ea3ae] transition hover:border-white/25 hover:text-white"
+                    >
+                      <Plus className="h-2.5 w-2.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </footer>
+
+      {/* Non-Blocking Right Slide-Over Drawers */}
+      {activeDrawer !== "none" && (
+        <div
+          className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-[2px]"
+          onClick={() => setActiveDrawer("none")}
+        >
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-label={
+              activeDrawer === "trends"
+                ? "Vitals Simulator and 14-Sol Telemetry Trends"
+                : activeDrawer === "hardware"
+                ? "Live ISS Telemetry and Biometric Hardware Bridge"
+                : "Crew Countermeasure Routine and NASA Citations"
+            }
+            onClick={(e) => e.stopPropagation()}
+            className="flex h-full w-full max-w-[640px] flex-col border-l border-white/15 bg-[#0c0e14] shadow-2xl"
+          >
+            <div className="flex shrink-0 items-center justify-between border-b border-white/[0.08] px-5 py-3.5">
+              <div className="flex items-center gap-2">
+                <Activity className="h-4 w-4 text-cyan-300" aria-hidden="true" />
+                <h2 className="text-sm font-semibold text-white">
+                  {activeDrawer === "trends"
+                    ? "Telemetry Simulator & 14-Sol Trends"
+                    : activeDrawer === "hardware"
+                    ? "Live ISS Telemetry & Biometric Hardware Bridge"
+                    : "Crew Countermeasure Routine & NASA Sources"}
+                </h2>
+              </div>
+              <button
+                type="button"
+                data-testid="close-drawer-btn"
+                onClick={() => setActiveDrawer("none")}
+                aria-label="Close drawer"
+                className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-xl border border-white/10 bg-[#161922] text-[#9ea3ae] hover:border-white/25 hover:text-white"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 sm:p-5">
+              {activeDrawer === "trends" ? (
+                <div className="space-y-5">
+                  <VitalsInputPanel
+                    vitals={vitals}
+                    envTelemetry={envTelemetry}
+                    envId={envId}
+                    onUpdateVitals={handleUpdateVitals}
+                    onUpdateEnvTelemetry={handleUpdateEnvTelemetry}
+                  />
+                  <TelemetryCharts
+                    history={history}
+                    currentVitals={vitals}
+                    currentEnvTelemetry={envTelemetry}
+                    envId={envId}
+                  />
+                </div>
+              ) : activeDrawer === "hardware" ? (
+                <HardwareBridgeDrawer
+                  telemetryMode={telemetryMode}
+                  onChangeTelemetryMode={handleChangeTelemetryMode}
+                  biometricSource={biometricSource}
+                  onChangeBiometricSource={setBiometricSource}
+                  liveVitals={liveVitals}
+                  onLiveBiometricPatch={handleLiveBiometricPatch}
+                  faultDeltaSummary={multiplexed.faultDeltaSummary}
+                  issSnapshot={issSnapshot}
+                  isRefreshingIss={isRefreshingIss}
+                  onRefreshIss={() => void refreshIssTelemetry()}
+                  osdrStudies={osdrStudies}
+                  onRefreshOsdr={() => void refreshOsdrStudies()}
+                  isRefreshingOsdr={isRefreshingOsdr}
+                />
+              ) : (
+                <div className="space-y-5">
+                  <RoutineGamificationBar
+                    tasks={DEFAULT_ROUTINE_TASKS}
+                    progress={routineProgress}
+                    onToggleTask={(taskId) => {
+                      handleToggleRoutineTask(taskId);
+                    }}
+                    onResetDay={handleResetRoutineDay}
+                    onSelectSystem={(sys) => {
+                      handleSelectSystem(sys);
+                      setActiveDrawer("none");
+                    }}
+                  />
+
+                  <div className="rounded-2xl border border-white/[0.08] bg-[#141414] p-4">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#7e828a]">
+                        NASA HRP · OSDR · CSA Open References
+                      </span>
+                      <span className="inline-flex items-center gap-1 font-mono text-[10px] text-emerald-300">
+                        <CheckCircle2 className="h-3 w-3" />
+                        Cited in Protocol
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {OFFICIAL_CHALLENGE_LINKS.map((link) => (
+                        <a
+                          key={link.url}
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-between gap-2 rounded-xl border border-white/[0.07] bg-[#1b1b1b] px-3 py-2 text-xs text-[#9ea3ae] transition hover:border-white/25 hover:text-white"
+                        >
+                          <span className="truncate">{link.label}</span>
+                          <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                        </a>
+                      ))}
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap gap-1.5 border-t border-white/[0.07] pt-3">
+                      {envConfig.activeHazards.map((hazardId) => {
+                        const hazard = NASA_HAZARDS[hazardId];
+                        return (
+                          <a
+                            key={hazardId}
+                            href={hazard.referenceUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="rounded-full border border-white/10 bg-[#1b1b1b] px-2.5 py-1 text-[10.5px] text-[#9ea3ae] hover:text-white"
+                          >
+                            {hazard.shortLabel} ×
+                            {envConfig.hazardWeights[hazardId].toFixed(1)}
+                          </a>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
     </div>
   );
 }

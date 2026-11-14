@@ -195,3 +195,104 @@ export interface RoutineProgressState {
   streakSols: number;
   lastUpdatedIso: string;
 }
+
+export type CmoWorkflowStage = "overview" | "exam" | "intervene" | "downlink";
+
+export interface SelectedSubStructure {
+  systemId: BodySystemId;
+  nodeName: string;
+  displayLabel: string;
+  layer: string;
+  tissueTag: string;
+}
+
+export interface ExamStepFinding {
+  status: "pending" | "normal" | "escalated";
+  note?: string;
+  measuredValue?: string;
+  updatedAt?: string;
+}
+
+export interface CountermeasureActionSpec {
+  id: string;
+  systemId: BodySystemId;
+  label: string;
+  protocolCode: string;
+  hardwareTarget: string;
+  deltaSummary: string;
+  vitalsPatch?: Partial<VitalReadings>;
+  envPatch?: Partial<EnvironmentTelemetry>;
+  routineTaskId?: string;
+}
+
+export interface ExecutedActionLog {
+  id: string;
+  actionId: string;
+  systemId: BodySystemId;
+  label: string;
+  deltaSummary: string;
+  timestamp: string;
+}
+
+export type TelemetryMode = "preset" | "live_hardware" | "hybrid_overlay";
+
+export type BiometricSourceType =
+  | "astroskin_stream"
+  | "web_bluetooth"
+  | "webcam_rppg"
+  | "external_api";
+
+export interface IssEthosSymbolReading {
+  symbol: string;
+  subsystem: "ETHOS_USLAB" | "ECLSS_NODE3" | "RADLAB_HERA";
+  label: string;
+  value: number | string;
+  unit: string;
+  nominalRange: string;
+}
+
+export interface IssLiveTelemetrySnapshot {
+  timestampUtc: string;
+  source: "iss_live_stream" | "iss_telemetry_fallback";
+  orbital: {
+    latitude: number;
+    longitude: number;
+    altitudeKm: number;
+    velocityKmh: number;
+    visibility: string;
+    inSouthAtlanticAnomaly: boolean;
+  };
+  symbols: Record<string, IssEthosSymbolReading>;
+  mappedEnvTelemetry: EnvironmentTelemetry;
+}
+
+export interface OsdrStudyLiveMetadata {
+  studyId: string;
+  title: string;
+  missionName: string;
+  organismOrSubject: string;
+  assayTypes: string[];
+  sampleCount: number;
+  source: "nasa_osdr_live" | "curated_osdr_cache";
+  osdrUrl: string;
+}
+
+export interface NasaHardwareSpec {
+  id: string;
+  name: string;
+  agency: "NASA" | "CSA" | "NASA / CSA";
+  program: string;
+  telemetrySymbolOrProtocol: string;
+  mappedMetrics: string[];
+  clinicalRole: string;
+  referenceUrl: string;
+}
+
+export interface FlightSurgeonPacketContext {
+  examFindings?: Record<string, ExamStepFinding>;
+  executedActions?: ExecutedActionLog[];
+  subStructure?: SelectedSubStructure | null;
+  telemetryMode?: TelemetryMode;
+  biometricSource?: BiometricSourceType;
+  issSnapshot?: IssLiveTelemetrySnapshot | null;
+}

@@ -14,7 +14,9 @@ import type {
   BodySystemId,
   CascadeLink,
   EnvironmentTelemetry,
+  SelectedSubStructure,
   SystemAssessment,
+  TelemetryMode,
   TriageStatus,
   VitalReadings,
 } from "@/types/health";
@@ -26,8 +28,11 @@ export interface BioTwin3DStageProps {
   cascades: CascadeLink[];
   selectedSystem: BodySystemId;
   onSelectSystem: (systemId: BodySystemId) => void;
+  onSelectSubStructure?: (info: SelectedSubStructure) => void;
   vitals?: VitalReadings;
   envTelemetry?: EnvironmentTelemetry;
+  telemetryMode?: TelemetryMode;
+  hardwareSourceLabel?: string;
   visualMode?: ClinicalVisualMode;
   /** Optional legacy prop kept for backward compatibility. */
   xrayIntensity?: "normal" | "deep";
@@ -469,8 +474,11 @@ export function BioTwin3DStage({
   cascades,
   selectedSystem,
   onSelectSystem,
+  onSelectSubStructure,
   vitals,
   envTelemetry,
+  telemetryMode = "preset",
+  hardwareSourceLabel,
   visualMode,
   xrayIntensity = "normal",
   autoRotate,
@@ -524,6 +532,9 @@ export function BioTwin3DStage({
 
   const onSelectRef = useRef(onSelectSystem);
   onSelectRef.current = onSelectSystem;
+
+  const onSelectSubStructureRef = useRef(onSelectSubStructure);
+  onSelectSubStructureRef.current = onSelectSubStructure;
 
   const cascadesRef = useRef<CascadeLink[]>(cascades);
   cascadesRef.current = cascades;
@@ -1236,6 +1247,13 @@ export function BioTwin3DStage({
           structureLabel: hit.parsed.structureLabel,
         });
         onSelectRef.current(hit.parsed.systemId);
+        onSelectSubStructureRef.current?.({
+          systemId: hit.parsed.systemId,
+          nodeName: hit.mesh.name,
+          displayLabel: hit.parsed.structureLabel,
+          layer: hit.parsed.layer,
+          tissueTag: hit.parsed.tissueTag,
+        });
       }
     };
 
@@ -1651,6 +1669,37 @@ export function BioTwin3DStage({
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-300">
             WebGL unavailable — switch to 2D Blueprint mode
+          </span>
+        </div>
+      )}
+
+      {/* Live Hardware / Hybrid Overlay Telemetry Link HUD */}
+      {loadState === "ready" && telemetryMode !== "preset" && (
+        <div
+          data-testid="live-hardware-hud"
+          className="pointer-events-none absolute top-3 left-3 z-20 inline-flex items-center gap-2 rounded-full border border-cyan-400/35 bg-[#0b1018]/90 px-3 py-1 font-mono text-[10px] text-cyan-200 shadow-lg backdrop-blur-md"
+        >
+          <span
+            className="h-2 w-2 rounded-full bg-emerald-400 animate-ping"
+            style={{
+              animationDuration: `${Math.max(
+                0.35,
+                60 / Math.max(40, vitals?.heartRateBpm ?? 68)
+              ).toFixed(2)}s`,
+            }}
+          />
+          <span className="font-semibold uppercase tracking-wider text-white">
+            {telemetryMode === "live_hardware"
+              ? "LIVE HARDWARE"
+              : "HYBRID OVERLAY"}
+          </span>
+          <span className="text-[#8b909a]">·</span>
+          <span className="truncate text-cyan-300">
+            {hardwareSourceLabel ?? "CSA ASTROSKIN / ISS ETHOS"}
+          </span>
+          <span className="text-[#8b909a]">·</span>
+          <span className="font-semibold text-rose-300 tabular-nums">
+            {vitals?.heartRateBpm ?? 68} BPM SYNC
           </span>
         </div>
       )}
