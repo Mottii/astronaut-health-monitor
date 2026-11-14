@@ -51,15 +51,15 @@
   - `DEFAULT_ROUTINE_TASKS: RoutineTask[]`
   - `BASE_14_SOL_HISTORY: Record<MissionEnvironmentId, SolTelemetryPoint[]>`
 
-- [ ] **Step 1: Initialize Next.js + TypeScript + Tailwind + Recharts + Lucide + Vitest workspace**
+- [x] **Step 1: Initialize Next.js + TypeScript + Tailwind + Recharts + Lucide + Vitest workspace**
   Run `npx` or `npm init` + install dependencies (`next`, `react`, `react-dom`, `lucide-react`, `recharts`, `typescript`, `@types/react`, `@types/react-dom`, `@types/node`, `tailwindcss`, `@tailwindcss/postcss`, `vitest`, `@vitejs/plugin-react`). Configure `package.json` scripts (`dev`, `build`, `start`, `lint`, `test`), `vitest.config.ts`, `tsconfig.json` (with `@/*` path alias), `next.config.ts`, `postcss.config.mjs`, and `src/app/globals.css` + `src/app/layout.tsx`.
-- [ ] **Step 2: Define domain types in `src/types/health.ts`**
+- [x] **Step 2: Define domain types in `src/types/health.ts`**
   Define all exported union types and interfaces listed in Interfaces above, including `EarthVsSpaceRange` (storing `earthRange: string`, `spaceRange: string`, `unit: string`) and `SelfExamStep` (`stepNumber`, `instruction`, `targetOutcome`).
-- [ ] **Step 3: Author curated NASA HRP, OSDR & CSA reference data in `src/data/nasaHrpData.ts`**
+- [x] **Step 3: Author curated NASA HRP, OSDR & CSA reference data in `src/data/nasaHrpData.ts`**
   Populate all 4 environments, 6 body systems (each with HRP risk summary, OSDR Study ID citation e.g. `OSD-48`, CSA reference where applicable, 3 plain-language self-exam steps, crew countermeasure actions, and flight surgeon escalation triggers), 4 demo scenarios, 5 daily routine tasks, and 14-Sol EDA/RadLab trend history arrays.
-- [ ] **Step 4: Verify TypeScript compilation & Vitest runner**
+- [x] **Step 4: Verify TypeScript compilation & Vitest runner**
   Run: `npx tsc --noEmit && npx vitest run` (expect `tsc` exits 0).
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   ```bash
   git add package.json package-lock.json tsconfig.json next.config.ts postcss.config.mjs vitest.config.ts src/
   git commit -m "chore: scaffold Next.js TypeScript app with NASA HRP and OSDR reference data"
