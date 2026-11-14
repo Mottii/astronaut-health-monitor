@@ -1040,6 +1040,10 @@ export function BioTwin3DStage({
 
     // Load Blender-exported multi-layer clinical GLB
     let disposed = false;
+    let outerBodyMesh: THREE.Mesh | null = null;
+    let proceduralSkeletonMesh: THREE.Mesh | null = null;
+    const legacyBoneMeshes: THREE.Mesh[] = [];
+    let unifiedSkeletonLoaded = false;
     const loader = new GLTFLoader();
     loader.load(
       "/models/ares-biotwin.glb",
@@ -1066,6 +1070,7 @@ export function BioTwin3DStage({
           if (obj.name === "Outer_Body_Shell") {
             obj.material = shellMaterial;
             obj.renderOrder = 10;
+            outerBodyMesh = obj;
             scene.add(obj);
 
             // Sample Outer_Body_Shell vertices into holographic point-cloud layer
@@ -1107,6 +1112,8 @@ export function BioTwin3DStage({
           if (obj.name === "Skeletal_Frame") {
             obj.material = skeletonMaterial;
             obj.renderOrder = 2;
+            obj.visible = !unifiedSkeletonLoaded;
+            proceduralSkeletonMesh = obj;
             scene.add(obj);
             continue;
           }
@@ -1152,6 +1159,12 @@ export function BioTwin3DStage({
           obj.material = mat;
           obj.userData = { systemId: sysId, parsed };
           obj.renderOrder = isShell ? 6 : 4;
+          if (parsed.tissueTag === "Bone") {
+            legacyBoneMeshes.push(obj);
+            if (unifiedSkeletonLoaded) {
+              obj.visible = false;
+            }
+          }
 
           if (parsed.isSystemicSpan) {
             scene.add(obj);
@@ -1178,6 +1191,102 @@ export function BioTwin3DStage({
       undefined,
       () => {
         if (!disposed) setLoadState("error");
+      }
+    );
+
+    // Load official NASA Z-2 Spacesuit GLB as high-detail outer holographic shell
+    loader.load(
+      "/models/z2-spacesuit.glb",
+      (gltf) => {
+        if (disposed) return;
+        const suitRoot = gltf.scene;
+        suitRoot.updateMatrixWorld(true);
+
+        const rawBox = new THREE.Box3().setFromObject(suitRoot);
+        const rawSize = new THREE.Vector3();
+        rawBox.getSize(rawSize);
+
+        if (rawSize.y > 0.001) {
+          const targetHeight = 1.94;
+          const uniformScale = targetHeight / rawSize.y;
+          suitRoot.scale.setScalar(uniformScale);
+          suitRoot.updateMatrixWorld(true);
+
+          const scaledBox = new THREE.Box3().setFromObject(suitRoot);
+          const scaledCenter = new THREE.Vector3();
+          scaledBox.getCenter(scaledCenter);
+
+          suitRoot.position.x -= scaledCenter.x;
+          suitRoot.position.y += -0.915 - scaledBox.min.y;
+          suitRoot.position.z -= scaledCenter.z;
+          suitRoot.updateMatrixWorld(true);
+        }
+
+        suitRoot.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            obj.material = shellMaterial;
+            obj.renderOrder = 10;
+          }
+        });
+
+        scene.add(suitRoot);
+        if (outerBodyMesh) {
+          outerBodyMesh.visible = false;
+        }
+      },
+      undefined,
+      () => {
+        // Keep Outer_Body_Shell fallback silently if spacesuit GLB is unavailable
+      }
+    );
+
+    // Load unified full-body anatomical skeleton GLB (242 real bones, MIT BodyParts3D)
+    loader.load(
+      "/models/skeleton.glb",
+      (gltf) => {
+        if (disposed) return;
+        const skelRoot = gltf.scene;
+        skelRoot.updateMatrixWorld(true);
+
+        const rawBox = new THREE.Box3().setFromObject(skelRoot);
+        const rawSize = new THREE.Vector3();
+        rawBox.getSize(rawSize);
+
+        if (rawSize.y > 0.001) {
+          const targetHeight = 1.78;
+          const uniformScale = targetHeight / rawSize.y;
+          skelRoot.scale.setScalar(uniformScale);
+          skelRoot.updateMatrixWorld(true);
+
+          const scaledBox = new THREE.Box3().setFromObject(skelRoot);
+          const scaledCenter = new THREE.Vector3();
+          scaledBox.getCenter(scaledCenter);
+
+          skelRoot.position.x -= scaledCenter.x;
+          skelRoot.position.y += -0.89 - scaledBox.min.y;
+          skelRoot.position.z -= scaledCenter.z;
+          skelRoot.updateMatrixWorld(true);
+        }
+
+        skelRoot.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            obj.material = skeletonMaterial;
+            obj.renderOrder = 2;
+          }
+        });
+
+        scene.add(skelRoot);
+        unifiedSkeletonLoaded = true;
+        if (proceduralSkeletonMesh) {
+          proceduralSkeletonMesh.visible = false;
+        }
+        for (const boneMesh of legacyBoneMeshes) {
+          boneMesh.visible = false;
+        }
+      },
+      undefined,
+      () => {
+        // Keep procedural Skeletal_Frame + legacy pelvis/knees fallback if skeleton.glb is unavailable
       }
     );
 
