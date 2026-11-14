@@ -10,6 +10,7 @@ import {
   loadCrewProfilesState,
   normalizeCrewProfile,
   parseUploadedDossierFile,
+  parseUploadedDossierReport,
   saveCrewProfilesState,
 } from "@/lib/crewProfileStorage";
 import {
@@ -18,9 +19,11 @@ import {
 } from "@/lib/triageEngine";
 import {
   computeOrganSensitivityMultipliers,
+  generateTwinConsultationSummary,
   runPreFlightQualificationSuite,
   simulatePersonalizedDrugResponse,
 } from "@/lib/twinEngine";
+import type { BodySystemId } from "@/types/health";
 
 describe("twinEngine & crew biological profiling", () => {
   const vance = DEFAULT_CREW_PROFILES.find((p) => p.id === "ares_1_vance")!;
@@ -104,21 +107,26 @@ describe("twinEngine & crew biological profiling", () => {
       "musculoskeletal_renal"
     );
 
-    // Apply Acetazolamide in-silico on Chen -> neuro_ocular clears, but secondary renal penalty fires cascade
+    // Apply Acetazolamide in-silico on Chen -> partial ocular relief (remains blurry_near at 62% efficacy),
+    // bounded -350 mL diuretic depletion without resetting ARED exercise, and active drug cascade fires red renal risk.
     const postChen = applyCountermeasureToState(
       sans.vitals,
       sans.envTelemetry,
       acetazolamide,
       chen
     );
-    expect(postChen.vitals.ocularFinding).toBe("clear");
-    expect(postChen.vitals.hydrationMl).toBeLessThanOrEqual(1450);
+    expect(postChen.vitals.ocularFinding).toBe("blurry_near");
+    expect(postChen.vitals.hydrationMl).toBe(sans.vitals.hydrationMl - 350);
+    expect(postChen.vitals.aredExerciseCompleted).toBe(
+      sans.vitals.aredExerciseCompleted
+    );
 
     const postChenEval = evaluateCrewHealth(
       postChen.vitals,
       postChen.envTelemetry,
       "iss_orbit",
-      chen
+      chen,
+      { activeDrugIds: ["neuro_acetazolamide_rx"] }
     );
     expect(postChenEval.systems.musculoskeletal_renal.status).toBe("red");
     expect(
@@ -168,7 +176,7 @@ describe("twinEngine & crew biological profiling", () => {
     ).toBe(310);
   });
 
-  it("ingests both JSON and PDF medical dossiers cleanly via parseUploadedDossierFile", () => {
+  it("ingests structured JSON/TXT/CSV dossiers cleanly and rejects binary PDFs offline", () => {
     const jsonProfile = parseUploadedDossierFile(
       "cmdr-lin.json",
       JSON.stringify({
@@ -181,14 +189,120 @@ describe("twinEngine & crew biological profiling", () => {
     expect(jsonProfile?.id).toBe("lin_json");
     expect(jsonProfile?.biochemical.urinaryCalciumMgDay).toBe(265);
 
-    const pdfProfile = parseUploadedDossierFile(
-      "ares_4_santos_jsc_lab.pdf",
-      "%PDF-1.4\nUrinary Calcium: 280\nCitrate: 230\nMTRR: GG\nCYP2C9: poor\n"
+    const txtProfile = parseUploadedDossierFile(
+      "ares_4_santos_jsc_lab.txt",
+      "Urinary Calcium: 280\nCitrate: 230\nMTRR: GG\nCYP2C9: poor\n"
     );
-    expect(pdfProfile).not.toBeNull();
-    expect(pdfProfile?.biochemical.urinaryCalciumMgDay).toBe(280);
-    expect(pdfProfile?.biochemical.urinaryCitrateMgDay).toBe(230);
-    expect(pdfProfile?.pharmacogenomics.mtrrGenotype).toBe("GG_sans_risk");
-    expect(pdfProfile?.pharmacogenomics.cyp2c9Phenotype).toBe("poor");
+    expect(txtProfile).not.toBeNull();
+    expect(txtProfile?.biochemical.urinaryCalciumMgDay).toBe(280);
+    expect(txtProfile?.biochemical.urinaryCitrateMgDay).toBe(230);
+    expect(txtProfile?.pharmacogenomics.mtrrGenotype).toBe("GG_sans_risk");
+    expect(txtProfile?.pharmacogenomics.cyp2c9Phenotype).toBe("poor");
+
+    const csvProfile = parseUploadedDossierFile(
+      "ares_5_okafor.csv",
+      "name,callsign,urinaryCalciumMgDay,urinaryCitrateMgDay\nDr. Okafor,ARES-5,245,310\n"
+    );
+    expect(csvProfile?.biochemical.urinaryCalciumMgDay).toBe(245);
+    expect(csvProfile?.biochemical.urinaryCitrateMgDay).toBe(310);
+
+    const pdfRejected = parseUploadedDossierReport(
+      "ares_4_santos_jsc_lab.pdf",
+      "%PDF-1.4\nUrinary Calcium: 280\nCitrate: 230\n"
+    );
+    expect(pdfRejected.ok).toBe(false);
+    expect(
+      parseUploadedDossierFile(
+        "ares_4_santos_jsc_lab.pdf",
+        "%PDF-1.4\nUrinary Calcium: 280\n"
+      )
+    ).toBeNull();
+  });
+
+  it("keeps organ sensitivity multipliers strictly below ceiling without flat-top clamping and remains monotonic", () => {
+    const secondarySystems: BodySystemId[] = [
+      "cardiovascular",
+      "metabolic_endocrine",
+      "behavioral_circadian",
+    ];
+    for (const profile of [vance, chen, korolev]) {
+      const mults = computeOrganSensitivityMultipliers(profile);
+      for (const value of Object.values(mults)) {
+        expect(value).toBeGreaterThanOrEqual(0.7);
+        expect(value).toBeLessThan(1.85);
+      }
+      for (const sec of secondarySystems) {
+        expect(mults[sec]).toBeLessThan(1.65);
+      }
+    }
+
+    // Calcium sweep: raising Ca2+ strictly increases musculoskeletal_renal multiplier
+    const caValues = [120, 250, 380, 550];
+    const caMults = caValues.map((ca) =>
+      computeOrganSensitivityMultipliers({
+        ...vance,
+        biochemical: { ...vance.biochemical, urinaryCalciumMgDay: ca },
+      }).musculoskeletal_renal
+    );
+    for (let i = 1; i < caMults.length; i++) {
+      expect(caMults[i]).toBeGreaterThan(caMults[i - 1]);
+      expect(caMults[i]).toBeLessThan(1.85);
+    }
+
+    // Citrate sweep: lowering citrate strictly increases musculoskeletal_renal multiplier
+    const citrateValues = [500, 260, 150, 80];
+    const citrateMults = citrateValues.map((citrate) =>
+      computeOrganSensitivityMultipliers({
+        ...vance,
+        biochemical: { ...vance.biochemical, urinaryCitrateMgDay: citrate },
+      }).musculoskeletal_renal
+    );
+    for (let i = 1; i < citrateMults.length; i++) {
+      expect(citrateMults[i]).toBeGreaterThan(citrateMults[i - 1]);
+      expect(citrateMults[i]).toBeLessThan(1.85);
+    }
+
+    // ATM repair sweep: lowering ATM repair score strictly increases immune_hematology multiplier
+    const atmValues = [1.2, 0.9, 0.7, 0.5];
+    const atmMults = atmValues.map((atm) =>
+      computeOrganSensitivityMultipliers({
+        ...korolev,
+        pharmacogenomics: {
+          ...korolev.pharmacogenomics,
+          atmDnaRepairScore: atm,
+        },
+      }).immune_hematology
+    );
+    for (let i = 1; i < atmMults.length; i++) {
+      expect(atmMults[i]).toBeGreaterThan(atmMults[i - 1]);
+      expect(atmMults[i]).toBeLessThan(1.85);
+    }
+  });
+
+  it("decouples bone/renal qualification assay from the acetazolamide pharmacological verdict", async () => {
+    const chenQuals = runPreFlightQualificationSuite(chen);
+    const acetazolamideAssay = chenQuals.find(
+      (q) => q.id === "qual_acetazolamide_pk"
+    );
+    const boneAssay = chenQuals.find((q) => q.id === "qual_bone_renal");
+
+    expect(acetazolamideAssay?.status).toBe("contraindicated");
+    expect(boneAssay?.status).toBe("caution");
+
+    const nominalEval = evaluateCrewHealth(
+      DEMO_SCENARIOS[0].vitals,
+      MISSION_ENVIRONMENTS.iss_orbit.defaultTelemetry,
+      "iss_orbit",
+      chen
+    );
+    const consultation = await generateTwinConsultationSummary(chen, nominalEval, {
+      mode: "local_mechanistic",
+      localEndpointUrl: "http://localhost:11434/v1/chat/completions",
+      localModelName: "llama3.2",
+      openApiEndpointUrl: "/api/twin-simulate",
+      openApiKey: "",
+    });
+    expect(consultation.source).toBe("deterministic");
+    expect(consultation.deterministicGuardrail).toContain("CONTRAINDICATED");
   });
 });

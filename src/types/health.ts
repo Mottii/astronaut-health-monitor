@@ -225,7 +225,8 @@ export interface CountermeasureActionSpec {
   envPatch?: Partial<EnvironmentTelemetry>;
   routineTaskId?: string;
   isPharmacological?: boolean;
-  primaryEnzyme?: "CYP2D6" | "CYP2C9" | "CA2_RENAL" | "GCSF_MARROW";
+  primaryEnzyme?: "CYP2D6" | "CYP2C9" | "CA2_RENAL";
+  protectiveFor?: "renal_stone";
 }
 
 export interface ExecutedActionLog {
@@ -319,6 +320,13 @@ export interface PhysiologicalEnduranceEnvelope {
   radiationToleranceMsvDay: number;  // 1.0 to 3.0 mSv/day acute hematopoietic threshold
 }
 
+export interface ProfileProvenance {
+  sourceType: "builtin" | "json_upload" | "text_upload" | "manual_override";
+  fileName?: string;
+  suppliedFields: string[];
+  defaultedFields: string[];
+}
+
 export interface AstronautBiologicalProfile {
   id: string;
   callsign: string;
@@ -329,12 +337,14 @@ export interface AstronautBiologicalProfile {
   biochemical: PreFlightBiochemicalPanel;
   pharmacogenomics: PharmacogenomicProfile;
   endurance: PhysiologicalEnduranceEnvelope;
+  provenance?: ProfileProvenance;
 }
 
 export type OrganSensitivityMultipliers = Record<BodySystemId, number>;
 
 export interface DrugSimulationPrediction {
   actionId: string;
+  basis: "profile_rule" | "phenotype_scaling";
   efficacyPct: number;
   recommendedDoseAdjustment: string;
   clearanceHalfLifeHours: number;

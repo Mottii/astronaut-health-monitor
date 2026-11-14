@@ -1,3 +1,4 @@
+import { ALL_BIOLOGICAL_FIELDS } from "@/lib/clinicalThresholds";
 import type {
   AstronautBiologicalProfile,
   BodySystemId,
@@ -842,8 +843,7 @@ export const EXECUTABLE_COUNTERMEASURES: Record<
         hydrationMl: 2550,
       },
       routineTaskId: "renal_hydration",
-      isPharmacological: true,
-      primaryEnzyme: "CYP2C9",
+      protectiveFor: "renal_stone",
     },
     {
       id: "msk_ared_session",
@@ -914,8 +914,6 @@ export const EXECUTABLE_COUNTERMEASURES: Record<
         heartRateBpm: 72,
         sleepHours: 7.4,
       },
-      isPharmacological: true,
-      primaryEnzyme: "CYP2D6",
     },
   ],
   behavioral_circadian: [
@@ -1105,6 +1103,12 @@ export const CURATED_OSDR_STUDIES: Record<string, OsdrStudyLiveMetadata> = {
   },
 };
 
+const BUILTIN_PROVENANCE = {
+  sourceType: "builtin" as const,
+  suppliedFields: [...ALL_BIOLOGICAL_FIELDS],
+  defaultedFields: [] as string[],
+};
+
 export const DEFAULT_CREW_PROFILES: AstronautBiologicalProfile[] = [
   {
     id: "ares_1_vance",
@@ -1134,6 +1138,7 @@ export const DEFAULT_CREW_PROFILES: AstronautBiologicalProfile[] = [
       lbnpEnduranceMin: 28,
       radiationToleranceMsvDay: 2.2,
     },
+    provenance: BUILTIN_PROVENANCE,
   },
   {
     id: "ares_2_chen",
@@ -1163,6 +1168,7 @@ export const DEFAULT_CREW_PROFILES: AstronautBiologicalProfile[] = [
       lbnpEnduranceMin: 34,
       radiationToleranceMsvDay: 2.0,
     },
+    provenance: BUILTIN_PROVENANCE,
   },
   {
     id: "ares_3_korolev",
@@ -1192,5 +1198,6 @@ export const DEFAULT_CREW_PROFILES: AstronautBiologicalProfile[] = [
       lbnpEnduranceMin: 38,
       radiationToleranceMsvDay: 1.35,
     },
+    provenance: BUILTIN_PROVENANCE,
   },
 ];
