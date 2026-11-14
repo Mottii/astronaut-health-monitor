@@ -116,7 +116,8 @@ export type CascadeId =
   | "gravity_fluid_sans"
   | "bone_calcium_renal"
   | "radiation_sleep_immune"
-  | "stress_glucose_metabolic";
+  | "stress_glucose_metabolic"
+  | "drug_acetazolamide_renal";
 
 export interface CascadeLink {
   id: CascadeId;
@@ -223,6 +224,8 @@ export interface CountermeasureActionSpec {
   vitalsPatch?: Partial<VitalReadings>;
   envPatch?: Partial<EnvironmentTelemetry>;
   routineTaskId?: string;
+  isPharmacological?: boolean;
+  primaryEnzyme?: "CYP2D6" | "CYP2C9" | "CA2_RENAL" | "GCSF_MARROW";
 }
 
 export interface ExecutedActionLog {
@@ -288,6 +291,84 @@ export interface NasaHardwareSpec {
   referenceUrl: string;
 }
 
+export type MtrrGenotype = "AA_normal" | "AG_heterozygous" | "GG_sans_risk";
+export type CypMetabolizerPhenotype = "ultra_rapid" | "normal" | "intermediate" | "poor";
+export type TwinInferenceMode = "local_mechanistic" | "local_ollama_llm" | "open_api";
+
+export interface PreFlightBiochemicalPanel {
+  urinaryCalciumMgDay: number;       // Earth normal: 100-220 mg/day; >250 hypercalciuria
+  urinaryCitrateMgDay: number;       // Stone inhibitor: >320 mg/day normal; <260 low
+  serumCtxPgMl: number;              // Bone resorption marker: 200-450 pg/mL normal
+  baselineLymphocyteCount: number;   // ALC cells/uL: 1500-3500 normal
+  serumFerritinNgMl: number;         // Iron stores: 40-200 ng/mL normal
+  baselineNflPgMl: number;           // Neurofilament light chain: 5-14 pg/mL normal
+}
+
+export interface PharmacogenomicProfile {
+  mtrrGenotype: MtrrGenotype;        // MTRR A66G one-carbon folate SNP (SANS risk)
+  cyp2d6Phenotype: CypMetabolizerPhenotype;
+  cyp2c9Phenotype: CypMetabolizerPhenotype;
+  atmDnaRepairScore: number;         // 0.50 to 1.40 (1.0 = normal DNA repair capacity)
+}
+
+export interface PhysiologicalEnduranceEnvelope {
+  co2ReactivitySlope: number;        // 0.60 to 2.00 (1.0 = nominal cerebral vasodilation per mmHg CO2)
+  baselineOnsdMm: number;            // 4.1 to 5.4 mm pre-flight ocular ultrasound baseline
+  dexaBoneTScore: number;            // -2.0 to +1.5 pre-flight spine/femur BMD T-score
+  lbnpEnduranceMin: number;          // 15 to 45 min orthostatic chamber tolerance
+  radiationToleranceMsvDay: number;  // 1.0 to 3.0 mSv/day acute hematopoietic threshold
+}
+
+export interface AstronautBiologicalProfile {
+  id: string;
+  callsign: string;
+  name: string;
+  role: string;
+  missionAssignment: MissionEnvironmentId;
+  summaryTag: string;
+  biochemical: PreFlightBiochemicalPanel;
+  pharmacogenomics: PharmacogenomicProfile;
+  endurance: PhysiologicalEnduranceEnvelope;
+}
+
+export type OrganSensitivityMultipliers = Record<BodySystemId, number>;
+
+export interface DrugSimulationPrediction {
+  actionId: string;
+  efficacyPct: number;
+  recommendedDoseAdjustment: string;
+  clearanceHalfLifeHours: number;
+  contraindicationSeverity: "none" | "caution" | "contraindicated";
+  contraindicationWarning?: string;
+  secondarySystemImpact?: {
+    systemId: BodySystemId;
+    scoreDelta: number;
+    vitalsPatch?: Partial<VitalReadings>;
+    mechanism: string;
+  };
+  mechanisticRationale: string;
+}
+
+export interface PreFlightQualificationTestResult {
+  id: string;
+  title: string;
+  chamberOrAssay: string;
+  targetSystem: BodySystemId;
+  status: "pass" | "caution" | "contraindicated";
+  predictedScore: number;
+  enduranceLimitLabel: string;
+  clinicalSummary: string;
+  recommendedInFlightCountermeasure: string;
+}
+
+export interface TwinInferenceConfig {
+  mode: TwinInferenceMode;
+  localEndpointUrl: string;
+  localModelName: string;
+  openApiEndpointUrl: string;
+  openApiKey: string;
+}
+
 export interface FlightSurgeonPacketContext {
   examFindings?: Record<string, ExamStepFinding>;
   executedActions?: ExecutedActionLog[];
@@ -295,4 +376,6 @@ export interface FlightSurgeonPacketContext {
   telemetryMode?: TelemetryMode;
   biometricSource?: BiometricSourceType;
   issSnapshot?: IssLiveTelemetrySnapshot | null;
+  crewProfile?: AstronautBiologicalProfile | null;
+  inferenceMode?: TwinInferenceMode;
 }

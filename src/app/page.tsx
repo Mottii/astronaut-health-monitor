@@ -1,18 +1,23 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import {
   Activity,
   BarChart3,
+  Check,
   CheckCircle2,
+  ChevronDown,
   Cpu,
   ExternalLink,
+  FlaskConical,
   ListChecks,
   Minus,
   Plus,
   Radio,
   RefreshCw,
   Sun,
+  UserCheck,
   X,
 } from "lucide-react";
 import { AutonomousCmoPanel } from "@/components/AutonomousCmoPanel";
@@ -47,12 +52,19 @@ import {
   saveRoutineProgress,
   toggleRoutineTask,
 } from "@/lib/routineStorage";
+import {
+  createDefaultCrewProfilesState,
+  loadCrewProfilesState,
+  saveCrewProfilesState,
+  type CrewProfilesStorageState,
+} from "@/lib/crewProfileStorage";
 import { fuseTelemetryStreams } from "@/lib/telemetryMultiplexer";
 import {
   applyCountermeasureToState,
   clampVitalReadings,
   evaluateCrewHealth,
 } from "@/lib/triageEngine";
+import { simulatePersonalizedDrugResponse } from "@/lib/twinEngine";
 import type {
   BiometricSourceType,
   BodySystemId,
@@ -80,9 +92,9 @@ const ENVIRONMENT_ORDER: MissionEnvironmentId[] = [
 ];
 
 const ENV_SHORT_LABEL: Record<MissionEnvironmentId, string> = {
-  iss_orbit: "ISS Orbit",
-  lunar_rover: "Lunar Rover",
-  mars_transit: "Mars Transit",
+  iss_orbit: "ISS",
+  lunar_rover: "Lunar",
+  mars_transit: "Transit",
   mars_base: "Mars Base",
 };
 
@@ -251,6 +263,12 @@ export default function HomePage() {
   const [activeDrawer, setActiveDrawer] = useState<
     "none" | "trends" | "routine" | "hardware"
   >("none");
+  const [crewStore, setCrewStore] = useState<CrewProfilesStorageState>(
+    createDefaultCrewProfilesState
+  );
+  const [crewHydrated, setCrewHydrated] = useState<boolean>(false);
+  const [crewMenuOpen, setCrewMenuOpen] = useState<boolean>(false);
+  const crewMenuRef = useRef<HTMLDivElement | null>(null);
   const astroTickRef = useRef<number>(0);
 
   const refreshIssTelemetry = useCallback(async () => {
@@ -289,8 +307,21 @@ export default function HomePage() {
 
   useEffect(() => {
     setRoutineProgress(loadRoutineProgress());
+    setCrewStore(loadCrewProfilesState());
+    setCrewHydrated(true);
     void refreshIssTelemetry();
   }, [refreshIssTelemetry]);
+
+  useEffect(() => {
+    if (!crewHydrated) return;
+    saveCrewProfilesState(crewStore);
+  }, [crewStore, crewHydrated]);
+
+  useEffect(() => {
+    const syncOnFocus = () => setCrewStore(loadCrewProfilesState());
+    window.addEventListener("focus", syncOnFocus);
+    return () => window.removeEventListener("focus", syncOnFocus);
+  }, []);
 
   useEffect(() => {
     if (telemetryMode === "preset") return;
@@ -318,6 +349,27 @@ export default function HomePage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeDrawer]);
 
+  useEffect(() => {
+    if (!crewMenuOpen) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (
+        crewMenuRef.current &&
+        !crewMenuRef.current.contains(e.target as Node)
+      ) {
+        setCrewMenuOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCrewMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [crewMenuOpen]);
+
   const multiplexed = useMemo(
     () =>
       fuseTelemetryStreams({
@@ -344,12 +396,19 @@ export default function HomePage() {
     ]
   );
 
+  const activeCrewProfile = useMemo(
+    () =>
+      crewStore.profiles.find((p) => p.id === crewStore.activeProfileId) ??
+      crewStore.profiles[0],
+    [crewStore]
+  );
+
   const vitals = multiplexed.vitals;
   const envTelemetry = multiplexed.envTelemetry;
 
   const evaluation = useMemo(
-    () => evaluateCrewHealth(vitals, envTelemetry, envId),
-    [vitals, envTelemetry, envId]
+    () => evaluateCrewHealth(vitals, envTelemetry, envId, activeCrewProfile),
+    [vitals, envTelemetry, envId, activeCrewProfile]
   );
 
   const envConfig = MISSION_ENVIRONMENTS[envId];
@@ -436,15 +495,27 @@ export default function HomePage() {
 
   function handleExecuteCountermeasure(action: CountermeasureActionSpec) {
     if (telemetryMode === "preset") {
-      const next = applyCountermeasureToState(vitals, envTelemetry, action);
+      const next = applyCountermeasureToState(
+        vitals,
+        envTelemetry,
+        action,
+        activeCrewProfile
+      );
       setActiveScenarioId("custom");
       setPresetVitals(next.vitals);
       setPresetEnv(next.envTelemetry);
     } else {
-      if (action.vitalsPatch) {
+      const drugPred = simulatePersonalizedDrugResponse(
+        activeCrewProfile,
+        action,
+        vitals,
+        envTelemetry
+      );
+      if (action.vitalsPatch || drugPred.secondarySystemImpact?.vitalsPatch) {
         setCountermeasureVitalsPatch((prev) => ({
           ...prev,
-          ...action.vitalsPatch,
+          ...(action.vitalsPatch ?? {}),
+          ...(drugPred.secondarySystemImpact?.vitalsPatch ?? {}),
         }));
       }
       if (action.envPatch) {
@@ -683,17 +754,21 @@ export default function HomePage() {
 
   const completedRoutineCount = routineProgress.completedTaskIds.length;
 
+  const activeCrewShortName =
+    activeCrewProfile.name.trim().split(" ").pop() ||
+    activeCrewProfile.callsign;
+
   return (
-    <div className="flex min-h-screen flex-col bg-[#07090e] text-white lg:h-dvh lg:overflow-hidden">
-      {/* ZONE A: Top Mission Status, Environment & 1-Click Scenario Bar */}
-      <header className="shrink-0 border-b border-white/[0.08] bg-[#0a0c12] px-3 py-1.5 lg:px-4">
-        <div className="flex flex-wrap items-center justify-between gap-2 xl:flex-nowrap">
-          {/* Left: Brand Identity + Mission Environment Switcher */}
-          <div className="flex flex-wrap items-center gap-2 xl:flex-nowrap">
-            <div className="flex shrink-0 items-center gap-1.5 pr-0.5">
+    <div className="flex min-h-screen flex-col bg-[#09090b] text-white lg:h-dvh lg:overflow-hidden">
+      {/* ZONE A: Compact Monochrome Top Command Bar */}
+      <header className="shrink-0 border-b border-white/[0.06] bg-[#0d0d0f] px-3 py-1.5 lg:px-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* Left: Brand Identity + Environment + Crew Menu + Pre-Flight Lab */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex shrink-0 items-center gap-1.5 pr-1">
               <svg
                 viewBox="0 0 32 32"
-                className="h-5 w-5 text-white"
+                className="h-4.5 w-4.5 text-white"
                 fill="none"
                 aria-hidden="true"
               >
@@ -703,7 +778,7 @@ export default function HomePage() {
                 />
                 <path
                   d="M5 20.5C11.5 14 20.5 11 29 9.5"
-                  stroke="#0a0c12"
+                  stroke="#0d0d0f"
                   strokeWidth="2.5"
                   strokeLinecap="round"
                 />
@@ -711,14 +786,14 @@ export default function HomePage() {
               <span className="text-xs font-semibold tracking-wider text-white">
                 ARES-MED
               </span>
-              <span className="hidden rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 font-mono text-[9.5px] text-[#8b909a] 2xl:inline-block">
+              <span className="hidden rounded border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 font-mono text-[9.5px] text-[#71717a] 2xl:inline-block">
                 SOL 42 · CMO
               </span>
             </div>
 
             <nav
               aria-label="Mission Environment Profile"
-              className="flex items-center gap-0.5 rounded-full border border-white/[0.08] bg-[#141414] p-0.5"
+              className="flex items-center gap-0.5 rounded-lg border border-white/[0.07] bg-[#141416] p-0.5"
             >
               {ENVIRONMENT_ORDER.map((id) => {
                 const env = MISSION_ENVIRONMENTS[id];
@@ -727,9 +802,10 @@ export default function HomePage() {
                   <button
                     key={id}
                     type="button"
+                    title={env.name}
                     onClick={() => handleSelectEnvironment(id)}
                     aria-pressed={active}
-                    className={`inline-flex min-h-[28px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[10.5px] font-medium transition ${
+                    className={`inline-flex h-[26px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-md px-2 text-[10.5px] font-medium transition ${
                       active
                         ? "bg-white text-[#0a0a0a]"
                         : "text-[#8b909a] hover:text-white"
@@ -748,14 +824,117 @@ export default function HomePage() {
                 );
               })}
             </nav>
+
+            {/* Compact Crew BioTwin Selector Popover + Pre-Flight Lab Link */}
+            <div ref={crewMenuRef} className="relative flex items-center gap-1">
+              <button
+                type="button"
+                data-testid="crew-selector-menu-btn"
+                aria-expanded={crewMenuOpen}
+                aria-haspopup="menu"
+                onClick={() => setCrewMenuOpen((prev) => !prev)}
+                title={`${activeCrewProfile.callsign} · ${activeCrewProfile.name} — ${activeCrewProfile.summaryTag}`}
+                className={`inline-flex h-[30px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-[10.5px] font-medium transition ${
+                  crewMenuOpen
+                    ? "border-white/25 bg-[#202024] text-white"
+                    : "border-white/[0.08] bg-[#141416] text-[#e4e4e7] hover:border-white/20 hover:text-white"
+                }`}
+              >
+                <UserCheck
+                  className="h-3 w-3 shrink-0 text-[#a1a1aa]"
+                  aria-hidden="true"
+                />
+                <span className="max-w-[88px] truncate">
+                  {activeCrewShortName}
+                </span>
+                <ChevronDown
+                  className={`h-3 w-3 text-[#71717a] transition-transform ${
+                    crewMenuOpen ? "rotate-180" : ""
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              {crewMenuOpen && (
+                <div
+                  role="menu"
+                  data-testid="crew-selector-popover"
+                  className="absolute top-9 left-0 z-40 w-72 rounded-2xl border border-white/[0.09] bg-[#121214]/95 p-2 shadow-2xl backdrop-blur-xl"
+                >
+                  <div className="flex items-center justify-between px-2 pb-1.5">
+                    <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#71717a]">
+                      Active Crew BioTwin ({crewStore.profiles.length})
+                    </span>
+                    <Link
+                      href="/preflight"
+                      onClick={() => setCrewMenuOpen(false)}
+                      className="text-[10px] font-medium text-[#a1a1aa] hover:text-white"
+                    >
+                      Upload / Edit →
+                    </Link>
+                  </div>
+                  <div className="max-h-64 space-y-0.5 overflow-y-auto">
+                    {crewStore.profiles.map((profile) => {
+                      const isActive = profile.id === activeCrewProfile.id;
+                      return (
+                        <button
+                          key={profile.id}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={isActive}
+                          data-testid={`crew-persona-${profile.id}`}
+                          onClick={() => {
+                            setCrewStore((prev) => ({
+                              ...prev,
+                              activeProfileId: profile.id,
+                            }));
+                            setCrewMenuOpen(false);
+                          }}
+                          className={`flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-left transition ${
+                            isActive
+                              ? "bg-white/[0.09] text-white"
+                              : "text-[#a1a1aa] hover:bg-white/[0.04] hover:text-white"
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-medium text-white">
+                              {profile.callsign} · {profile.name}
+                            </p>
+                            <p className="mt-0.5 truncate text-[10px] text-[#71717a]">
+                              {profile.summaryTag}
+                            </p>
+                          </div>
+                          {isActive && (
+                            <Check
+                              className="h-3.5 w-3.5 shrink-0 text-white"
+                              aria-hidden="true"
+                            />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <Link
+                href="/preflight"
+                data-testid="open-preflight-lab-link"
+                title="Open NASA JSC Pre-Flight Bio-Twin Dossier & AI Lab"
+                className="inline-flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-white/[0.08] bg-[#141416] px-2.5 text-[10.5px] font-medium text-[#d4d4d8] transition hover:border-white/25 hover:bg-[#1a1a1e] hover:text-white"
+              >
+                <FlaskConical className="h-3 w-3 text-[#a1a1aa]" aria-hidden="true" />
+                <span>Pre-Flight</span>
+              </Link>
+            </div>
           </div>
 
-          {/* Center/Right: 1-Click Scenario Simulator + Drawers + Readiness */}
-          <div className="flex flex-wrap items-center gap-1.5 xl:flex-nowrap">
+          {/* Right: Scenario Presets + Unified Console Tools Bar + Readiness */}
+          <div className="flex flex-wrap items-center gap-1.5">
             <div
               role="group"
               aria-label="Judge demo scenarios"
-              className="flex items-center gap-0.5 rounded-full border border-white/[0.08] bg-[#141414] p-0.5"
+              className="flex items-center gap-0.5 rounded-lg border border-white/[0.07] bg-[#141416] p-0.5"
             >
               {DEMO_SCENARIOS.map((scenario) => {
                 const isSelected = activeScenarioId === scenario.id;
@@ -766,10 +945,10 @@ export default function HomePage() {
                     data-testid={`scenario-pill-${scenario.id}`}
                     onClick={() => handleSelectScenario(scenario)}
                     aria-pressed={isSelected}
-                    className={`min-h-[28px] cursor-pointer whitespace-nowrap rounded-full px-2 py-0.5 text-[10.5px] font-medium transition ${
+                    className={`h-[26px] cursor-pointer whitespace-nowrap rounded-md px-2 text-[10.5px] font-medium transition ${
                       isSelected
-                        ? "bg-cyan-400 text-[#07090e] font-semibold"
-                        : "text-[#9ea3ae] hover:bg-white/[0.06] hover:text-white"
+                        ? "bg-white text-[#0a0a0a]"
+                        : "text-[#8b909a] hover:bg-white/[0.05] hover:text-white"
                     }`}
                   >
                     {SCENARIO_SHORT_LABEL[scenario.id]}
@@ -778,109 +957,110 @@ export default function HomePage() {
               })}
             </div>
 
-            <button
-              type="button"
-              data-testid="open-hardware-drawer"
-              onClick={() =>
-                setActiveDrawer((prev) =>
-                  prev === "hardware" ? "none" : "hardware"
-                )
-              }
-              aria-expanded={activeDrawer === "hardware"}
-              className={`inline-flex min-h-[30px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-1 text-[10.5px] font-medium transition ${
-                activeDrawer === "hardware"
-                  ? "border-cyan-400 bg-cyan-500/20 text-cyan-200"
-                  : telemetryMode !== "preset"
-                  ? "border-emerald-400/50 bg-emerald-500/15 text-emerald-200"
-                  : "border-white/10 bg-[#141414] text-white hover:border-white/25"
-              }`}
-            >
-              <Cpu className="h-3 w-3 text-cyan-300" aria-hidden="true" />
-              <span>
-                {telemetryMode === "preset"
-                  ? "Live Bridge"
-                  : telemetryMode === "live_hardware"
-                  ? "Live HW"
-                  : "Hybrid"}
-              </span>
-              {telemetryMode !== "preset" && (
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              )}
-            </button>
-
-            <button
-              type="button"
-              data-testid="open-trends-drawer"
-              onClick={() =>
-                setActiveDrawer((prev) =>
-                  prev === "trends" ? "none" : "trends"
-                )
-              }
-              aria-expanded={activeDrawer === "trends"}
-              className={`inline-flex min-h-[30px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-1 text-[10.5px] font-medium transition ${
-                activeDrawer === "trends"
-                  ? "border-cyan-400 bg-cyan-500/15 text-cyan-200"
-                  : "border-white/10 bg-[#141414] text-white hover:border-white/25"
-              }`}
-            >
-              <BarChart3 className="h-3 w-3 text-cyan-300" aria-hidden="true" />
-              <span className="hidden 2xl:inline">Simulator &amp; Charts</span>
-              <span className="2xl:hidden">Charts</span>
-            </button>
-
-            <button
-              type="button"
-              data-testid="open-routine-drawer"
-              onClick={() =>
-                setActiveDrawer((prev) =>
-                  prev === "routine" ? "none" : "routine"
-                )
-              }
-              aria-expanded={activeDrawer === "routine"}
-              className={`inline-flex min-h-[30px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-1 text-[10.5px] font-medium transition ${
-                activeDrawer === "routine"
-                  ? "border-emerald-400 bg-emerald-500/15 text-emerald-200"
-                  : "border-white/10 bg-[#141414] text-white hover:border-white/25"
-              }`}
-            >
-              <ListChecks className="h-3 w-3 text-emerald-300" aria-hidden="true" />
-              <span>
-                Routine {completedRoutineCount}/{DEFAULT_ROUTINE_TASKS.length}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleSyncSpaceWeather}
-              disabled={isSyncingWeather}
-              title={spaceWeather?.summary ?? "Sync live NASA DONKI space weather"}
-              className="inline-flex min-h-[30px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border border-white/10 bg-[#141414] px-2.5 py-1 text-[10.5px] font-medium text-white transition hover:border-white/25 disabled:opacity-60"
-            >
-              <RefreshCw
-                className={`h-3 w-3 text-[#8b909a] ${
-                  isSyncingWeather ? "animate-spin" : ""
+            <div className="flex items-center gap-0.5 rounded-lg border border-white/[0.07] bg-[#141416] p-0.5">
+              <button
+                type="button"
+                data-testid="open-hardware-drawer"
+                onClick={() =>
+                  setActiveDrawer((prev) =>
+                    prev === "hardware" ? "none" : "hardware"
+                  )
+                }
+                aria-expanded={activeDrawer === "hardware"}
+                className={`inline-flex h-[26px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-md px-2 text-[10.5px] font-medium transition ${
+                  activeDrawer === "hardware"
+                    ? "bg-white text-[#0a0a0a]"
+                    : telemetryMode !== "preset"
+                    ? "bg-emerald-500/15 text-emerald-300"
+                    : "text-[#d4d4d8] hover:bg-white/[0.05] hover:text-white"
                 }`}
-                aria-hidden="true"
-              />
-              <span>{isSyncingWeather ? "Sync..." : "DONKI"}</span>
-              {spaceWeather && (
-                <Sun
-                  className={`h-3 w-3 ${
-                    spaceWeather.isFallback
-                      ? "text-amber-300"
-                      : "text-emerald-300"
+              >
+                <Cpu className="h-3 w-3 opacity-80" aria-hidden="true" />
+                <span>
+                  {telemetryMode === "preset"
+                    ? "Bridge"
+                    : telemetryMode === "live_hardware"
+                    ? "Live HW"
+                    : "Hybrid"}
+                </span>
+                {telemetryMode !== "preset" && (
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                )}
+              </button>
+
+              <button
+                type="button"
+                data-testid="open-trends-drawer"
+                onClick={() =>
+                  setActiveDrawer((prev) =>
+                    prev === "trends" ? "none" : "trends"
+                  )
+                }
+                aria-expanded={activeDrawer === "trends"}
+                className={`inline-flex h-[26px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-md px-2 text-[10.5px] font-medium transition ${
+                  activeDrawer === "trends"
+                    ? "bg-white text-[#0a0a0a]"
+                    : "text-[#d4d4d8] hover:bg-white/[0.05] hover:text-white"
+                }`}
+              >
+                <BarChart3 className="h-3 w-3 opacity-80" aria-hidden="true" />
+                <span>Charts</span>
+              </button>
+
+              <button
+                type="button"
+                data-testid="open-routine-drawer"
+                onClick={() =>
+                  setActiveDrawer((prev) =>
+                    prev === "routine" ? "none" : "routine"
+                  )
+                }
+                aria-expanded={activeDrawer === "routine"}
+                className={`inline-flex h-[26px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-md px-2 text-[10.5px] font-medium transition ${
+                  activeDrawer === "routine"
+                    ? "bg-white text-[#0a0a0a]"
+                    : "text-[#d4d4d8] hover:bg-white/[0.05] hover:text-white"
+                }`}
+              >
+                <ListChecks className="h-3 w-3 opacity-80" aria-hidden="true" />
+                <span>
+                  Routine {completedRoutineCount}/{DEFAULT_ROUTINE_TASKS.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSyncSpaceWeather}
+                disabled={isSyncingWeather}
+                title={spaceWeather?.summary ?? "Sync live NASA DONKI space weather"}
+                className="inline-flex h-[26px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-md px-2 text-[10.5px] font-medium text-[#d4d4d8] transition hover:bg-white/[0.05] hover:text-white disabled:opacity-60"
+              >
+                <RefreshCw
+                  className={`h-3 w-3 text-[#8b909a] ${
+                    isSyncingWeather ? "animate-spin" : ""
                   }`}
                   aria-hidden="true"
                 />
-              )}
-            </button>
+                <span>{isSyncingWeather ? "Sync" : "DONKI"}</span>
+                {spaceWeather && (
+                  <Sun
+                    className={`h-3 w-3 ${
+                      spaceWeather.isFallback
+                        ? "text-amber-300"
+                        : "text-emerald-300"
+                    }`}
+                    aria-hidden="true"
+                  />
+                )}
+              </button>
+            </div>
 
             <div
               data-testid="readiness-badge"
-              className={`inline-flex min-h-[30px] items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium ${readinessStyle.badgeClass}`}
+              className={`inline-flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-[11px] font-medium ${readinessStyle.badgeClass}`}
             >
               <span
-                className={`h-2 w-2 rounded-full ${readinessStyle.dotClass}`}
+                className={`h-1.5 w-1.5 rounded-full ${readinessStyle.dotClass}`}
               />
               <span className="hidden 2xl:inline">Readiness</span>
               <span className="font-mono font-semibold tabular-nums">
@@ -894,7 +1074,7 @@ export default function HomePage() {
       {/* ZONE B: Full-Viewport Center 2-Column Console */}
       <main className="min-h-0 flex-1 overflow-y-auto p-2.5 lg:overflow-hidden lg:p-3">
         <div className="grid grid-cols-1 gap-2.5 lg:h-full lg:grid-cols-12">
-          <div className="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#141414] lg:col-span-7 lg:h-full xl:col-span-8">
+          <div className="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-white/[0.06] bg-[#111113] lg:col-span-7 lg:h-full xl:col-span-8">
             <BioTwinBodyMap
               assessments={evaluation.systems}
               cascades={evaluation.activeCascades}
@@ -908,7 +1088,7 @@ export default function HomePage() {
             />
           </div>
 
-          <div className="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#141414] lg:col-span-5 lg:h-full xl:col-span-4">
+          <div className="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-white/[0.06] bg-[#111113] lg:col-span-5 lg:h-full xl:col-span-4">
             <AutonomousCmoPanel
               selectedSystem={selectedSystem}
               evaluation={evaluation}
@@ -928,6 +1108,8 @@ export default function HomePage() {
               telemetryMode={telemetryMode}
               biometricSource={biometricSource}
               issSnapshot={issSnapshot}
+              crewProfile={activeCrewProfile}
+              inferenceMode={crewStore.inferenceConfig.mode}
             />
           </div>
         </div>
@@ -936,7 +1118,7 @@ export default function HomePage() {
       {/* ZONE C: Persistent 6-Channel Bottom Telemetry Dock */}
       <footer
         aria-label="Live physiological and environmental telemetry strip"
-        className="shrink-0 border-t border-white/[0.08] bg-[#0a0c12] px-3 py-1.5 lg:px-4"
+        className="shrink-0 border-t border-white/[0.06] bg-[#0d0d0f] px-3 py-1.5 lg:px-4"
       >
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           {telemetryStripChannels.map((ch) => {
@@ -962,8 +1144,8 @@ export default function HomePage() {
                 }}
                 className={`flex min-w-0 cursor-pointer flex-col justify-between rounded-xl border px-2.5 py-1.5 transition ${
                   isSelected
-                    ? "border-white/25 bg-[#161a23]"
-                    : "border-white/[0.07] bg-[#11131a] hover:border-white/20"
+                    ? "border-white/20 bg-[#1a1a1d]"
+                    : "border-white/[0.06] bg-[#121214] hover:border-white/15"
                 }`}
               >
                 <div className="flex items-center justify-between gap-1.5">
@@ -984,7 +1166,7 @@ export default function HomePage() {
                       values={ch.sparkValues}
                       strokeHex={ch.strokeHex}
                     />
-                    <span className="hidden truncate font-mono text-[9px] text-[#6d727e] 2xl:inline">
+                    <span className="hidden truncate font-mono text-[9px] text-[#71717a] 2xl:inline">
                       {ch.targetLabel}
                     </span>
                   </div>
@@ -997,7 +1179,7 @@ export default function HomePage() {
                       type="button"
                       onClick={() => ch.onStep(-1)}
                       aria-label={`Decrease ${ch.label}`}
-                      className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md border border-white/10 bg-[#1a1d26] text-[#9ea3ae] transition hover:border-white/25 hover:text-white"
+                      className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md border border-white/[0.08] bg-[#18181b] text-[#9ea3ae] transition hover:border-white/25 hover:text-white"
                     >
                       <Minus className="h-2.5 w-2.5" aria-hidden="true" />
                     </button>
@@ -1005,7 +1187,7 @@ export default function HomePage() {
                       type="button"
                       onClick={() => ch.onStep(1)}
                       aria-label={`Increase ${ch.label}`}
-                      className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md border border-white/10 bg-[#1a1d26] text-[#9ea3ae] transition hover:border-white/25 hover:text-white"
+                      className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md border border-white/[0.08] bg-[#18181b] text-[#9ea3ae] transition hover:border-white/25 hover:text-white"
                     >
                       <Plus className="h-2.5 w-2.5" aria-hidden="true" />
                     </button>
@@ -1020,7 +1202,7 @@ export default function HomePage() {
       {/* Non-Blocking Right Slide-Over Drawers */}
       {activeDrawer !== "none" && (
         <div
-          className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-[2px]"
+          className="fixed inset-0 z-50 flex justify-end bg-black/55 backdrop-blur-[2px]"
           onClick={() => setActiveDrawer("none")}
         >
           <aside
@@ -1034,11 +1216,11 @@ export default function HomePage() {
                 : "Crew Countermeasure Routine and NASA Citations"
             }
             onClick={(e) => e.stopPropagation()}
-            className="flex h-full w-full max-w-[640px] flex-col border-l border-white/15 bg-[#0c0e14] shadow-2xl"
+            className="flex h-full w-full max-w-[640px] flex-col border-l border-white/10 bg-[#0e0e10] shadow-2xl"
           >
-            <div className="flex shrink-0 items-center justify-between border-b border-white/[0.08] px-5 py-3.5">
+            <div className="flex shrink-0 items-center justify-between border-b border-white/[0.06] px-5 py-3.5">
               <div className="flex items-center gap-2">
-                <Activity className="h-4 w-4 text-cyan-300" aria-hidden="true" />
+                <Activity className="h-4 w-4 text-[#a1a1aa]" aria-hidden="true" />
                 <h2 className="text-sm font-semibold text-white">
                   {activeDrawer === "trends"
                     ? "Telemetry Simulator & 14-Sol Trends"
@@ -1052,7 +1234,7 @@ export default function HomePage() {
                 data-testid="close-drawer-btn"
                 onClick={() => setActiveDrawer("none")}
                 aria-label="Close drawer"
-                className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-xl border border-white/10 bg-[#161922] text-[#9ea3ae] hover:border-white/25 hover:text-white"
+                className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-xl border border-white/[0.08] bg-[#18181b] text-[#9ea3ae] hover:border-white/25 hover:text-white"
               >
                 <X className="h-4 w-4" aria-hidden="true" />
               </button>

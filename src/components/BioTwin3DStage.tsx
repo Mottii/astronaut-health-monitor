@@ -1207,10 +1207,10 @@ export function BioTwin3DStage({
       {loadState === "ready" && telemetryMode !== "preset" && (
         <div
           data-testid="live-hardware-hud"
-          className="pointer-events-none absolute top-3 left-3 z-20 inline-flex items-center gap-2 rounded-full border border-cyan-400/35 bg-[#0b1018]/90 px-3 py-1 font-mono text-[10px] text-cyan-200 shadow-lg backdrop-blur-md"
+          className="pointer-events-none absolute top-3 left-3 z-20 inline-flex items-center gap-2 rounded-lg border border-white/[0.08] bg-[#111113]/90 px-2.5 py-1 font-mono text-[10px] text-[#d4d4d8] shadow-lg backdrop-blur-md"
         >
           <span
-            className="h-2 w-2 rounded-full bg-emerald-400 animate-ping"
+            className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-ping"
             style={{
               animationDuration: `${Math.max(
                 0.35,
@@ -1223,13 +1223,13 @@ export function BioTwin3DStage({
               ? "LIVE HARDWARE"
               : "HYBRID OVERLAY"}
           </span>
-          <span className="text-[#8b909a]">·</span>
-          <span className="truncate text-cyan-300">
+          <span className="text-[#52525b]">·</span>
+          <span className="truncate text-[#a1a1aa]">
             {hardwareSourceLabel ?? "CSA ASTROSKIN / ISS ETHOS"}
           </span>
-          <span className="text-[#8b909a]">·</span>
-          <span className="font-semibold text-rose-300 tabular-nums">
-            {vitals?.heartRateBpm ?? 68} BPM SYNC
+          <span className="text-[#52525b]">·</span>
+          <span className="font-semibold text-white tabular-nums">
+            {vitals?.heartRateBpm ?? 68} BPM
           </span>
         </div>
       )}
@@ -1238,26 +1238,29 @@ export function BioTwin3DStage({
       {loadState === "ready" && (
         <div
           data-testid="surgical-hud-readout"
-          className="pointer-events-none absolute right-3 bottom-3 left-3 z-20 max-w-[360px] rounded-xl border border-white/10 bg-[#0d0e11]/90 px-3 py-2 shadow-xl backdrop-blur-md"
+          className="pointer-events-none absolute right-3 bottom-3 left-3 z-20 flex max-w-[340px] items-stretch gap-2.5 rounded-xl border border-white/[0.08] bg-[#111113]/90 px-3 py-2 shadow-xl backdrop-blur-md"
         >
-          <div className="flex items-center justify-between gap-2 font-mono text-[9px] uppercase tracking-[0.12em] text-[#8b909a]">
-            <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
-              <span
-                className="h-1.5 w-1.5 shrink-0 rounded-full"
-                style={{ backgroundColor: hudAccentHex }}
-              />
-              {hoveredInfo ? "RAYCAST TARGET" : "ACTIVE SUB-STRUCTURE"}
-            </span>
-            <span className="shrink-0 whitespace-nowrap rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[8.5px] text-white/80">
-              {activeHudInfo.layer} · {activeHudInfo.tissueTag}
-            </span>
+          <span
+            className="w-[2px] shrink-0 rounded-full"
+            style={{ backgroundColor: hudAccentHex }}
+            aria-hidden="true"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2 font-mono text-[9px] uppercase tracking-[0.12em] text-[#71717a]">
+              <span className="truncate">
+                {hoveredInfo ? "RAYCAST TARGET" : "ACTIVE SUB-STRUCTURE"}
+              </span>
+              <span className="shrink-0 whitespace-nowrap rounded border border-white/[0.08] bg-white/[0.04] px-1.5 py-0.5 text-[8.5px] text-[#d4d4d8]">
+                {activeHudInfo.layer} · {activeHudInfo.tissueTag}
+              </span>
+            </div>
+            <p className="mt-1 truncate text-xs font-medium text-white">
+              {activeHudInfo.structureLabel}
+            </p>
+            <p className="mt-0.5 truncate font-mono text-[10px] text-[#71717a]">
+              {BODY_SYSTEM_METADATA[activeHudInfo.systemId].shortLabel}
+            </p>
           </div>
-          <p className="mt-1 truncate text-xs font-semibold text-white">
-            {activeHudInfo.structureLabel}
-          </p>
-          <p className="mt-0.5 truncate font-mono text-[10px] text-[#7e828a]">
-            {BODY_SYSTEM_METADATA[activeHudInfo.systemId].shortLabel}
-          </p>
         </div>
       )}
 
@@ -1282,10 +1285,10 @@ export function BioTwin3DStage({
               type="button"
               onClick={() => onSelectSystem(systemId)}
               style={{ opacity: 0 }}
-              className={`absolute top-0 left-0 z-10 inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2.5 font-mono text-[9.5px] font-semibold backdrop-blur-md transition-colors ${
+              className={`absolute top-0 left-0 z-10 inline-flex h-[22px] items-center gap-1.5 rounded-md border px-2 font-mono text-[9.5px] font-medium backdrop-blur-md transition-colors ${
                 isSelected
                   ? "border-white bg-white text-[#0a0a0a] shadow-lg"
-                  : "border-white/15 bg-[#141414]/85 text-white hover:border-white/35"
+                  : "border-white/[0.12] bg-[#111113]/85 text-[#e4e4e7] hover:border-white/30 hover:text-white"
               }`}
             >
               <span
@@ -1293,7 +1296,7 @@ export function BioTwin3DStage({
                 style={{ backgroundColor: dotColor }}
               />
               <span>{shortTitle}</span>
-              <span className={isSelected ? "text-[#0a0a0a]/75" : "text-[#7e828a]"}>
+              <span className={isSelected ? "text-[#0a0a0a]/75" : "text-[#71717a]"}>
                 {assessment.score}
               </span>
             </button>

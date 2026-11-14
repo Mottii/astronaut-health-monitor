@@ -1,5 +1,10 @@
 import { BODY_SYSTEM_METADATA, MISSION_ENVIRONMENTS } from "@/data/nasaHrpData";
+import {
+  computeOrganSensitivityMultipliers,
+  simulatePersonalizedDrugResponse,
+} from "@/lib/twinEngine";
 import type {
+  AstronautBiologicalProfile,
   BodySystemId,
   CascadeLink,
   CountermeasureActionSpec,
@@ -472,7 +477,8 @@ function assessBehavioralCircadian(
 function detectCascades(
   vitals: VitalReadings,
   envTelemetry: EnvironmentTelemetry,
-  env: MissionEnvironmentConfig
+  env: MissionEnvironmentConfig,
+  crewProfile?: AstronautBiologicalProfile | null
 ): CascadeLink[] {
   const cascades: CascadeLink[] = [];
 
@@ -565,17 +571,39 @@ function detectCascades(
     });
   }
 
+  // 5. Hypercalciuric pharmacogenomic / urinary alkalinization renal trap (e.g. Acetazolamide -> Kidneys)
+  if (
+    crewProfile &&
+    (crewProfile.biochemical.urinaryCalciumMgDay >= 250 ||
+      crewProfile.biochemical.urinaryCitrateMgDay <= 250) &&
+    vitals.hydrationMl <= 1450
+  ) {
+    cascades.push({
+      id: "drug_acetazolamide_renal",
+      title: "Hypercalciuric Profile / CA2 Shift -> CaPO4 Renal Stone",
+      fromSystem: "neuro_ocular",
+      toSystem: "musculoskeletal_renal",
+      severity: "red",
+      mechanism: `Elevated baseline urinary calcium (${crewProfile.biochemical.urinaryCalciumMgDay} mg/d) and low citrate (${crewProfile.biochemical.urinaryCitrateMgDay} mg/d) in ${crewProfile.callsign} crystallize rapidly when renal perfusion drops or carbonic anhydrase Rx alkalinizes urine.`,
+      triggeredByHazard: "gravity",
+      immediateAction:
+        "Discontinue carbonic anhydrase inhibitor immediately; switch to LBNP cuffs + Potassium Citrate 20 mEq + 650 mL hydration bolus.",
+    });
+  }
+
   return cascades;
 }
 
 /**
  * Evaluates all 6 astronaut body systems, detects active organ-to-organ cascades,
- * and computes overall Mission Readiness Score (0–100).
+ * and computes overall Mission Readiness Score (0–100), optionally calibrated
+ * against an astronaut's pre-flight biological & pharmacogenomic BioTwin profile.
  */
 export function evaluateCrewHealth(
   vitals: VitalReadings,
   envTelemetry: EnvironmentTelemetry,
-  envId: MissionEnvironmentId
+  envId: MissionEnvironmentId,
+  crewProfile?: AstronautBiologicalProfile | null
 ): HealthEvaluationResult {
   const env = MISSION_ENVIRONMENTS[envId];
   const clampedVitals = clampVitalReadings(vitals);
@@ -590,7 +618,12 @@ export function evaluateCrewHealth(
     behavioral_circadian: assessBehavioralCircadian(clampedVitals, clampedEnv, env),
   };
 
-  const activeCascades = detectCascades(clampedVitals, clampedEnv, env);
+  const activeCascades = detectCascades(
+    clampedVitals,
+    clampedEnv,
+    env,
+    crewProfile
+  );
 
   // Propagate severe cascade escalations onto target organ assessments
   for (const cascade of activeCascades) {
@@ -604,6 +637,57 @@ export function evaluateCrewHealth(
       `[CASCADE: ${cascade.title}] ${cascade.mechanism}`,
       ...target.findings,
     ];
+  }
+
+  // Calibrate organ scores and biological warnings using the active astronaut's pre-flight BioTwin profile
+  if (crewProfile) {
+    const multipliers = computeOrganSensitivityMultipliers(crewProfile);
+
+    for (const sys of Object.values(systems)) {
+      const mult = multipliers[sys.systemId];
+      const baseDeficit = Math.max(0, 96 - sys.score);
+      const calibratedScore = Math.round(
+        clampNumber(96 - baseDeficit * mult, 0, 100, sys.score)
+      );
+      sys.score = calibratedScore;
+      if (baseDeficit > 0) {
+        if (calibratedScore < 60) {
+          sys.status = "red";
+        } else if (calibratedScore < 82) {
+          sys.status = maxStatus(sys.status, "amber");
+        }
+      }
+    }
+
+    if (
+      crewProfile.pharmacogenomics.mtrrGenotype === "GG_sans_risk" ||
+      crewProfile.endurance.co2ReactivitySlope >= 1.35
+    ) {
+      systems.neuro_ocular.findings = [
+        `[BIOTWIN ${crewProfile.callsign}] MTRR ${crewProfile.pharmacogenomics.mtrrGenotype} + ${crewProfile.endurance.co2ReactivitySlope.toFixed(2)}x CO2 reactivity (${multipliers.neuro_ocular.toFixed(2)}x SANS sensitivity).`,
+        ...systems.neuro_ocular.findings,
+      ];
+    }
+
+    if (
+      crewProfile.biochemical.urinaryCalciumMgDay >= 250 ||
+      crewProfile.endurance.dexaBoneTScore <= -1.0
+    ) {
+      systems.musculoskeletal_renal.findings = [
+        `[BIOTWIN ${crewProfile.callsign}] Hypercalciuric baseline (Ca2+ ${crewProfile.biochemical.urinaryCalciumMgDay} mg/d, Citrate ${crewProfile.biochemical.urinaryCitrateMgDay} mg/d, DEXA ${crewProfile.endurance.dexaBoneTScore.toFixed(1)}) -> ${multipliers.musculoskeletal_renal.toFixed(2)}x renal stone sensitivity.`,
+        ...systems.musculoskeletal_renal.findings,
+      ];
+    }
+
+    if (
+      crewProfile.pharmacogenomics.atmDnaRepairScore <= 0.8 ||
+      crewProfile.biochemical.baselineLymphocyteCount < 1600
+    ) {
+      systems.immune_hematology.findings = [
+        `[BIOTWIN ${crewProfile.callsign}] Radiosensitive baseline (ATM ${crewProfile.pharmacogenomics.atmDnaRepairScore.toFixed(2)}, ALC ${crewProfile.biochemical.baselineLymphocyteCount}/uL) -> ${multipliers.immune_hematology.toFixed(2)}x marrow vulnerability.`,
+        ...systems.immune_hematology.findings,
+      ];
+    }
   }
 
   let redCount = 0;
@@ -653,16 +737,32 @@ export function evaluateCrewHealth(
 
 /**
  * Applies a hardware-mapped countermeasure protocol to crew vitals and habitat telemetry
- * with physiological clamping, enabling closed-loop autonomous BioTwin recovery.
+ * with physiological clamping, and injects any persona-specific cross-organ drug
+ * interactions predicted by the astronaut's BioTwin pharmacogenomic profile.
  */
 export function applyCountermeasureToState(
   vitals: VitalReadings,
   envTelemetry: EnvironmentTelemetry,
-  action: CountermeasureActionSpec
+  action: CountermeasureActionSpec,
+  crewProfile?: AstronautBiologicalProfile | null
 ): { vitals: VitalReadings; envTelemetry: EnvironmentTelemetry } {
+  let secondaryVitalsPatch: Partial<VitalReadings> = {};
+  if (crewProfile) {
+    const drugPred = simulatePersonalizedDrugResponse(
+      crewProfile,
+      action,
+      vitals,
+      envTelemetry
+    );
+    if (drugPred.secondarySystemImpact?.vitalsPatch) {
+      secondaryVitalsPatch = drugPred.secondarySystemImpact.vitalsPatch;
+    }
+  }
+
   const nextVitals = clampVitalReadings({
     ...vitals,
     ...(action.vitalsPatch ?? {}),
+    ...secondaryVitalsPatch,
   });
   const nextEnv = clampEnvTelemetry({
     ...envTelemetry,
@@ -762,6 +862,17 @@ export function formatFlightSurgeonPacket(
         );
       }
     }
+  }
+
+  if (clinicalContext.crewProfile) {
+    const mults = computeOrganSensitivityMultipliers(clinicalContext.crewProfile);
+    extraLines.push(
+      ``,
+      `[ASTRONAUT BIOLOGICAL PROFILE & INFERENCE ENGINE]`,
+      `- Crew Persona: ${clinicalContext.crewProfile.name} (${clinicalContext.crewProfile.callsign}) — ${clinicalContext.crewProfile.summaryTag}`,
+      `- Pharmacogenomics: MTRR=${clinicalContext.crewProfile.pharmacogenomics.mtrrGenotype}, CYP2D6=${clinicalContext.crewProfile.pharmacogenomics.cyp2d6Phenotype}, CYP2C9=${clinicalContext.crewProfile.pharmacogenomics.cyp2c9Phenotype}, ATM=${clinicalContext.crewProfile.pharmacogenomics.atmDnaRepairScore}`,
+      `- Multipliers: Neuro=${mults.neuro_ocular}x, Renal=${mults.musculoskeletal_renal}x, Immune=${mults.immune_hematology}x | Engine=${clinicalContext.inferenceMode ?? "local_mechanistic"}`
+    );
   }
 
   if (clinicalContext.subStructure) {
