@@ -10,6 +10,9 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { BODY_SYSTEM_METADATA } from "@/data/nasaHrpData";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
+import { BRIEFING_TRANSITION_MS, cameraArc, easeInOutCubic } from "@/lib/presentationMotion";
+import { sampleBriefingPose, storyFocus } from "@/lib/briefingPath";
 import {
   buildShellEnvelope,
   containGeometryInsideShell,
@@ -28,6 +31,14 @@ import type {
 } from "@/types/health";
 
 export type ClinicalVisualMode = "atlas" | "xray" | "vascular";
+
+export interface FocusProjection {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  visible: boolean;
+}
 
 export interface BioTwin3DStageProps {
   assessments: Record<BodySystemId, SystemAssessment>;
@@ -56,6 +67,16 @@ export interface BioTwin3DStageProps {
   calloutFilter?: "all" | "selected" | "none";
   /** Callback fired when a timed camera fly-to transition finishes */
   onCameraTransitionEnd?: () => void;
+  /** Presentation direction; ordinary console controls retain their behavior. */
+  cinematic?: boolean;
+  sceneCue?: number;
+  inspectEnabled?: boolean;
+  onFocusProjection?: (projection: FocusProjection) => void;
+  onTransitionProgress?: (progress: number) => void;
+  /** Explicit visitor choice can opt into full motion without changing OS settings. */
+  reducedMotionOverride?: boolean;
+  storyProgress?: { current: number };
+  modelRotation?: { current: number };
 }
 
 interface ParsedSubStructure {
@@ -108,24 +129,24 @@ const SYSTEM_BASE_HEX: Record<BodySystemId, string> = {
 };
 
 const TISSUE_COLOR_HEX: Record<string, string> = {
-  Myocardium: "#c4455b",   // deep ruby myocardium
-  Valve: "#cbd5e1",        // pearlescent valve leaflets
-  Artery: "#cf5353",       // oxygenated arterial crimson
-  Vein: "#3b76b8",         // deoxygenated venous cobalt
-  Parenchyma: "#7c88c4",   // soft indigo-lavender lung parenchyma
+  Myocardium: "#b93b5b",   // deep ruby myocardium
+  Valve: "#c0b9ae",        // pearlescent valve leaflets
+  Artery: "#c84a46",       // oxygenated arterial crimson
+  Vein: "#315eb5",         // deoxygenated venous cobalt
+  Parenchyma: "#7d61b7",   // soft indigo-lavender lung parenchyma
   Airway: "#94a3b8",       // cool slate trachea/bronchi
-  Lymphoid: "#9b6bc2",     // violet spleen & lymph nodes
-  Cortex: "#3ea6c2",       // crisp cyan cerebral cortex
-  Ventricle: "#38bdf8",    // bright aqua CSF ventricles
-  Neural: "#5e82ad",       // steel-blue spinal cord
-  Ocular: "#2dd4bf",       // teal optic chiasm & globes
-  Endocrine: "#818cf8",    // periwinkle pineal/pituitary
-  Hepatic: "#a85143",      // warm terracotta liver
+  Lymphoid: "#9e4d9c",     // violet spleen & lymph nodes
+  Cortex: "#1f9894",       // crisp cyan cerebral cortex
+  Ventricle: "#45aeb9",    // bright aqua CSF ventricles
+  Neural: "#3e6d9a",       // steel-blue spinal cord
+  Ocular: "#2dbaa7",       // teal optic chiasm & globes
+  Endocrine: "#7763b3",    // periwinkle pineal/pituitary
+  Hepatic: "#b06130",      // warm terracotta liver
   Ligament: "#b59b5c",     // muted ochre ligaments
-  Gland: "#d49a45",        // amber-gold pancreas/adrenals
-  GI: "#c9864c",           // warm bronze stomach & colon
-  RenalCortex: "#2ea885",  // emerald-teal renal cortex
-  RenalMedulla: "#b85c72", // rose-plum renal pyramids
+  Gland: "#cc9a35",        // amber-gold pancreas/adrenals
+  GI: "#a27837",           // warm bronze stomach & colon
+  RenalCortex: "#179879",  // emerald-teal renal cortex
+  RenalMedulla: "#a64e6c", // rose-plum renal pyramids
   Urinary: "#3c9984",      // sea-green ureters & bladder
   Bone: "#94a3b8",         // unified X-ray slate bone
 };
@@ -133,11 +154,11 @@ const TISSUE_COLOR_HEX: Record<string, string> = {
 function resolveStructureColorHex(parsed: ParsedSubStructure): string {
   const label = parsed.structureLabel;
   if (parsed.systemId === "metabolic_endocrine") {
-    if (label.includes("Small Intestine")) return "#d97757";      // warm coral-peach small bowel
-    if (label.includes("Large Intestine")) return "#7ca368";      // distinct sage-olive colon
-    if (label.includes("Pancreas")) return "#e0a838";             // amber-gold pancreas
+    if (label.includes("Small Intestine")) return "#ca8048";      // warm coral-peach small bowel
+    if (label.includes("Large Intestine")) return "#5d9c4e";      // distinct sage-olive colon
+    if (label.includes("Pancreas")) return "#ce9c32";             // amber-gold pancreas
     if (label.includes("Caudate")) return "#c95842";              // copper-red caudate/porta
-    if (label.includes("Parenchyma")) return "#8c3b36";           // deep mahogany liver lobes
+    if (label.includes("Parenchyma")) return "#9f3e2d";           // deep mahogany liver lobes
     if (label.includes("Ligament")) return "#d6c38b";             // pale gold hepatic ligaments
   }
   return TISSUE_COLOR_HEX[parsed.tissueTag] ?? SYSTEM_BASE_HEX[parsed.systemId];
@@ -234,6 +255,17 @@ const FULL_BODY_VIEW = {
   position: new THREE.Vector3(0.18, 0.10, 2.90),
 };
 
+// Deliberately different shot angles, rather than a sequence of front-facing zooms.
+const BRIEFING_VIEWS: Record<"full" | BodySystemId, { target: THREE.Vector3; position: THREE.Vector3 }> = {
+  full: { target: new THREE.Vector3(0, -0.28, 0), position: new THREE.Vector3(0.48, 0.06, 4.05) },
+  neuro_ocular: { target: new THREE.Vector3(0, 0.73, 0), position: new THREE.Vector3(0.38, 0.85, 1.02) },
+  behavioral_circadian: { target: new THREE.Vector3(0, 0.73, 0), position: new THREE.Vector3(-0.38, 0.89, 1.05) },
+  cardiovascular: { target: new THREE.Vector3(0, 0.36, 0), position: new THREE.Vector3(-0.43, 0.55, 1.28) },
+  musculoskeletal_renal: { target: new THREE.Vector3(0, 0.13, 0), position: new THREE.Vector3(0.64, 0.38, 1.6) },
+  immune_hematology: { target: new THREE.Vector3(0, 0.38, 0), position: new THREE.Vector3(-0.45, 0.63, 1.5) },
+  metabolic_endocrine: { target: new THREE.Vector3(0, 0.22, 0), position: new THREE.Vector3(0.4, 0.42, 1.22) },
+};
+
 const FRESNEL_VERTEX_SHADER = `
   varying vec3 vNormalW;
   varying vec3 vWorldPos;
@@ -250,8 +282,11 @@ const FRESNEL_VERTEX_SHADER = `
 
 const FRESNEL_FRAGMENT_SHADER = `
   uniform float uTime;
+  uniform float uReveal;
   uniform float uXrayDeep;
   uniform float uTransitionScan;
+  uniform vec3 uHoverPoint;
+  uniform float uHoverStrength;
   uniform vec3 uFocusPos;
   uniform vec3 uAccentColor;
 
@@ -269,7 +304,7 @@ const FRESNEL_FRAGMENT_SHADER = `
     float scanline = 0.5 + 0.5 * sin(vWorldPos.y * 190.0 - uTime * 1.4);
     float gridY = smoothstep(0.93, 0.99, abs(sin(vWorldPos.y * 42.0)));
     float gridX = smoothstep(0.95, 0.995, abs(sin(vWorldPos.x * 42.0 + vWorldPos.z * 42.0)));
-    float holoGrid = max(gridY, gridX) * 0.22;
+    float holoGrid = max(gridY, gridX) * 0.012;
 
     // Gentle ambient scan + pronounced chapter-transition scan sweep
     float sweepY = mod(uTime * 0.35, 2.2) - 1.05;
@@ -291,12 +326,13 @@ const FRESNEL_FRAGMENT_SHADER = `
     col += rimCol * holoGrid * (0.28 + fresnel * 0.6);
     col += vec3(0.05, 0.09, 0.14) * scanline * fresnel;
 
-    float baseAlpha = mix(0.016, 0.52, fresnel) + holoGrid * 0.06;
-    float cutoutAlpha = mix(0.05, 1.0, focusWindow);
+    float baseAlpha = mix(0.008, 0.14, fresnel) + holoGrid * 0.06;
+    float hoverWindow = (1.0 - smoothstep(0.10, 0.23, distance(vWorldPos, uHoverPoint))) * uHoverStrength;
+    float cutoutAlpha = mix(0.22, 1.0, focusWindow) * (1.0 - hoverWindow * 0.85);
     float depthFactor = mix(1.0, 0.38, uXrayDeep);
     float alpha = clamp(baseAlpha * cutoutAlpha * depthFactor + sweep * 0.04 + transSweep * 0.16, 0.01, 0.72);
 
-    gl_FragColor = vec4(col, alpha);
+    gl_FragColor = vec4(col, alpha * uReveal);
   }
 `;
 
@@ -312,39 +348,23 @@ const NEBULA_FRAGMENT_SHADER = `
   uniform float uTime;
   uniform vec3 uAccentColor;
   varying vec3 vDir;
-
-  float hash(vec3 p) {
-    p = fract(p * 0.3183099 + 0.1);
-    p *= 17.0;
-    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
-  }
-
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
   void main() {
-    float waveA = sin(vDir.x * 3.8 + uTime * 0.09) * cos(vDir.y * 3.2 - uTime * 0.07);
-    float waveB = sin((vDir.z + vDir.y) * 5.2 + uTime * 0.11);
-    float waveC = cos((vDir.x - vDir.z) * 2.6 - uTime * 0.05);
-    float neb = clamp(0.48 + 0.30 * waveA + 0.22 * waveB + 0.14 * waveC, 0.0, 1.0);
-
-    vec3 deepSpace = vec3(0.018, 0.022, 0.034);
-    vec3 indigoMist = vec3(0.048, 0.088, 0.168);
-    vec3 col = mix(deepSpace, indigoMist, pow(neb, 1.85));
-
-    // Soft behind-silhouette cosmic horizon glow
-    float horizonGlow = exp(-pow(vDir.y * 2.4, 2.0)) * 0.55;
-    col += uAccentColor * (0.075 * pow(neb, 2.4) + 0.05 * horizonGlow);
-
-    // Layer 1: Dense crisp distant stars
-    vec3 cellFar = floor(vDir * 175.0);
-    float starFar = step(0.9925, hash(cellFar));
-    float twinkleFar = 0.5 + 0.5 * sin(uTime * 1.4 + hash(cellFar) * 28.0);
-    col += vec3(0.72, 0.86, 1.0) * starFar * twinkleFar * 0.45;
-
-    // Layer 2: Sparse brighter cool-cyan orbital stars
-    vec3 cellNear = floor(vDir * 72.0 + vec3(3.1, 7.4, 1.9));
-    float starNear = step(0.9965, hash(cellNear));
-    float twinkleNear = 0.65 + 0.35 * sin(uTime * 2.1 + hash(cellNear) * 19.0);
-    col += mix(vec3(0.85, 0.94, 1.0), uAccentColor, 0.35) * starNear * twinkleNear * 0.78;
-
+    vec3 n = normalize(vDir);
+    vec2 uv = vec2(atan(n.z, n.x) / 6.2831853 + 0.5, asin(n.y) / 3.1415926 + 0.5);
+    float cloud = sin(n.x * 5.0 + uTime * 0.06) * cos(n.y * 4.0 - uTime * 0.04);
+    float halo = exp(-pow(n.x * 2.8, 2.0) - pow((n.y + 0.05) * 3.0, 2.0));
+    vec3 col = vec3(0.008, 0.011, 0.017) + vec3(0.014, 0.028, 0.045) * halo * (0.8 + cloud * 0.2);
+    // Circular, subpixel stars instead of bright square cells on the dome.
+    vec2 grid = uv * vec2(240.0, 120.0);
+    vec2 id = floor(grid);
+    vec2 center = vec2(hash(id), hash(id + 47.3)) * 0.6 + 0.2;
+    float d = length(fract(grid) - center);
+    float star = (1.0 - smoothstep(0.015, 0.08, d)) * step(0.985, hash(id + 19.0));
+    float band = exp(-pow((n.y - n.x * 0.32 + 0.15) * 5.0, 2.0));
+    float wisps = 0.5 + 0.25*sin(n.x*19.0+n.z*11.0+uTime*0.025) + 0.15*sin(n.y*37.0-n.x*23.0);
+    col += mix(vec3(0.012,0.014,0.025),vec3(0.019,0.032,0.041),wisps) * band * wisps;
+    col += vec3(0.30, 0.40, 0.47) * star * (0.65 + 0.2 * sin(uTime * 0.7 + hash(id) * 20.0));
     gl_FragColor = vec4(col, 1.0);
   }
 `;
@@ -363,21 +383,22 @@ const PARTICLE_SHELL_VERTEX = `
     vFocusGlow = 1.0 - smoothstep(0.05, 0.32, dist);
 
     vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
-    gl_PointSize = clamp((2.6 + vFocusGlow * 2.2) / max(-mvPos.z, 0.45), 1.4, 5.0);
+    gl_PointSize = clamp((1.0 + vFocusGlow * 0.6) / max(-mvPos.z, 0.65), 0.7, 2.0);
     gl_Position = projectionMatrix * mvPos;
   }
 `;
 
 const PARTICLE_SHELL_FRAGMENT = `
   uniform vec3 uAccentColor;
+  uniform float uReveal;
   varying float vFocusGlow;
 
   void main() {
     float d = length(gl_PointCoord - vec2(0.5));
     if (d > 0.5) discard;
-    float alpha = smoothstep(0.5, 0.08, d) * (0.34 + vFocusGlow * 0.48);
+    float alpha = smoothstep(0.5, 0.08, d) * (0.025 + vFocusGlow * 0.035);
     vec3 col = mix(vec3(0.45, 0.82, 0.98), uAccentColor, vFocusGlow * 0.75);
-    gl_FragColor = vec4(col, alpha);
+    gl_FragColor = vec4(col, alpha * uReveal);
   }
 `;
 
@@ -429,7 +450,7 @@ const CINEMA_POST_SHADER = {
     void main() {
       vec3 col = texture2D(tDiffuse, vUv).rgb;
 
-      float grain = (rand(vUv + fract(uTime)) - 0.5) * 0.008;
+      float grain = (rand(vUv + fract(uTime)) - 0.5) * 0.002;
       col += grain;
 
       gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
@@ -523,6 +544,14 @@ export function BioTwin3DStage({
   hideBottomHud = false,
   calloutFilter = "all",
   onCameraTransitionEnd,
+  cinematic = false,
+  sceneCue = 0,
+  inspectEnabled = true,
+  onFocusProjection,
+  onTransitionProgress,
+  reducedMotionOverride,
+  storyProgress,
+  modelRotation,
 }: BioTwin3DStageProps) {
   const effectiveMode: ClinicalVisualMode =
     visualMode ?? (xrayIntensity === "deep" ? "xray" : "atlas");
@@ -579,6 +608,18 @@ export function BioTwin3DStage({
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const onCameraTransitionEndRef = useRef(onCameraTransitionEnd);
   onCameraTransitionEndRef.current = onCameraTransitionEnd;
+  const projectionCallbackRef = useRef(onFocusProjection);
+  projectionCallbackRef.current = onFocusProjection;
+  const progressCallbackRef = useRef(onTransitionProgress);
+  progressCallbackRef.current = onTransitionProgress;
+  const cinematicRef = useRef(cinematic);
+  cinematicRef.current = cinematic;
+  const inspectEnabledRef = useRef(inspectEnabled);
+  inspectEnabledRef.current = inspectEnabled;
+  const storyProgressRef = useRef(storyProgress);
+  storyProgressRef.current = storyProgress;
+  const modelRotationRef = useRef(modelRotation);
+  modelRotationRef.current = modelRotation;
   const enableParallaxRef = useRef(enableParallax);
   enableParallaxRef.current = enableParallax;
   const calloutFilterRef = useRef(calloutFilter);
@@ -586,9 +627,8 @@ export function BioTwin3DStage({
   const cameraPresetRef = useRef(cameraPreset);
   cameraPresetRef.current = cameraPreset;
 
-  const prefersReducedMotion =
-    typeof window !== "undefined" &&
-    Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+  const systemReducedMotion = useReducedMotion();
+  const prefersReducedMotion = reducedMotionOverride ?? systemReducedMotion;
   const reducedMotionRef = useRef(prefersReducedMotion);
   reducedMotionRef.current = prefersReducedMotion;
 
@@ -613,7 +653,7 @@ export function BioTwin3DStage({
   }>({
     active: false,
     elapsed: 0,
-    duration: 1.15,
+    duration: BRIEFING_TRANSITION_MS / 1000,
     startPos: FULL_BODY_VIEW.position.clone(),
     startLook: FULL_BODY_VIEW.target.clone(),
     targetPos: FULL_BODY_VIEW.position.clone(),
@@ -621,6 +661,7 @@ export function BioTwin3DStage({
   });
 
   const startCameraFly = (targetPos: THREE.Vector3, targetLook: THREE.Vector3) => {
+    if (storyProgressRef.current) return;
     const cam = cameraRef.current;
     const ctrl = controlsRef.current;
     if (reducedMotionRef.current && cam && ctrl) {
@@ -628,6 +669,7 @@ export function BioTwin3DStage({
       ctrl.target.copy(targetLook);
       ctrl.update();
       flyRef.current.active = false;
+      progressCallbackRef.current?.(1);
       onCameraTransitionEndRef.current?.();
       return;
     }
@@ -635,7 +677,7 @@ export function BioTwin3DStage({
     flyRef.current = {
       active: true,
       elapsed: 0,
-      duration: 1.15,
+      duration: cinematicRef.current ? BRIEFING_TRANSITION_MS / 1000 : 1.15,
       startPos: cam ? cam.position.clone() : flyRef.current.targetPos.clone(),
       startLook: ctrl ? ctrl.target.clone() : flyRef.current.targetLook.clone(),
       targetPos: targetPos.clone(),
@@ -645,6 +687,7 @@ export function BioTwin3DStage({
 
   // Trigger camera fly-to when user changes selectedSystem after mount
   useEffect(() => {
+    if (cameraPreset) return; // Presentation presets own the camera; picking cannot override a shot.
     if (!mountedSelectionRef.current) {
       mountedSelectionRef.current = true;
       return;
@@ -656,25 +699,35 @@ export function BioTwin3DStage({
   // Trigger full-body camera reset when cameraResetToken increments
   useEffect(() => {
     if (cameraResetToken === 0) return;
-    startCameraFly(FULL_BODY_VIEW.position, FULL_BODY_VIEW.target);
+    const preset = cinematicRef.current ? BRIEFING_VIEWS[cameraPreset ?? "full"] : FULL_BODY_VIEW;
+    startCameraFly(preset.position, preset.target);
   }, [cameraResetToken]);
 
   // Explicit camera preset override (used by presentation slides)
   useEffect(() => {
     if (!cameraPreset) return;
-    const view =
-      cameraPreset === "full"
+    const view = cinematic
+      ? BRIEFING_VIEWS[cameraPreset]
+      : cameraPreset === "full"
         ? FULL_BODY_VIEW
         : (ORGAN_CAMERA_VIEWS[cameraPreset] ?? FULL_BODY_VIEW);
-    startCameraFly(view.position, view.target);
-  }, [cameraPreset]);
+    const position = view.position.clone();
+    // Portrait screens need a wider lens distance to retain both shoulders.
+    const aspect = cameraRef.current?.aspect ?? 1.5;
+    if (cinematic && aspect < 0.85) {
+      position.sub(view.target).multiplyScalar(cameraPreset === "full" ? 1.38 : 1.55).add(view.target);
+    }
+    startCameraFly(position, view.target);
+  }, [cameraPreset, cinematic, sceneCue]);
 
   // Sync wheel zoom permission without re-initializing WebGL
   useEffect(() => {
     if (controlsRef.current) {
       controlsRef.current.enableZoom = allowWheelZoom;
+      controlsRef.current.enableRotate = inspectEnabled;
+      controlsRef.current.enablePan = inspectEnabled;
     }
-  }, [allowWheelZoom]);
+  }, [allowWheelZoom, inspectEnabled]);
 
   // Rebuild 3D cascade spline conduits whenever active cascades change
   useEffect(() => {
@@ -703,17 +756,28 @@ export function BioTwin3DStage({
     renderer.setSize(width, height, false);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.15;
+    renderer.toneMappingExposure = 0.96;
     renderer.domElement.className = "block h-full w-full";
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
+    const anatomyRoot = new THREE.Group();
+    scene.add(anatomyRoot);
     scene.background = new THREE.Color("#06070a");
     scene.fog = new THREE.FogExp2("#06070a", 0.19);
 
     const camera = new THREE.PerspectiveCamera(38, width / height, 0.05, 30);
     camera.position.copy(FULL_BODY_VIEW.position);
+    const storyTarget = new THREE.Vector3();
+    if (storyProgressRef.current) sampleBriefingPose(storyProgressRef.current.current, camera.position, storyTarget);
     cameraRef.current = camera;
+
+    const frameStory = (w: number, h: number) => {
+      if (!storyProgressRef.current) return;
+      // Reserve the left side for the editorial copy; mobile reserves its lower half.
+      camera.setViewOffset(w, h, w / h > 1.1 ? -w * 0.18 : 0, w / h <= 1.1 ? h * 0.22 : 0, w, h);
+    };
+    frameStory(width, height);
 
     const composer = new EffectComposer(renderer);
     composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -721,9 +785,9 @@ export function BioTwin3DStage({
     const renderPass = new RenderPass(scene, camera);
     const bloomPass = new UnrealBloomPass(
       new THREE.Vector2(width, height),
-      0.38,
-      0.55,
-      0.72
+      0.10,
+      0.35,
+      0.96
     );
     const outputPass = new OutputPass();
     const cinemaPass = new ShaderPass(CINEMA_POST_SHADER);
@@ -734,12 +798,14 @@ export function BioTwin3DStage({
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controlsRef.current = controls;
-    controls.target.copy(FULL_BODY_VIEW.target);
+    controls.target.copy(storyProgressRef.current ? storyTarget : FULL_BODY_VIEW.target);
     controls.enableDamping = true;
     controls.dampingFactor = 0.07;
     controls.enableZoom = allowWheelZoom;
+    controls.enableRotate = inspectEnabled;
+    controls.enablePan = inspectEnabled;
     controls.minDistance = 0.55;
-    controls.maxDistance = 4.2;
+    controls.maxDistance = cinematic ? 7 : 4.2;
     controls.maxPolarAngle = Math.PI * 0.92;
     controls.minPolarAngle = Math.PI * 0.08;
     controls.update();
@@ -861,13 +927,31 @@ export function BioTwin3DStage({
     );
     scene.add(nebulaDome);
 
+    // Distant orbiting light particles: no recognizable planet discs in the composition.
+    const orbitCount = 36;
+    const orbitPositions = new Float32Array(orbitCount * 3);
+    const orbitColors = new Float32Array(orbitCount * 3);
+    const orbitPalette = ["#50bfff", "#8a80ed", "#6dc9d3", "#b2d8ef"];
+    for (let i = 0; i < orbitCount; i++) {
+      const color = new THREE.Color(orbitPalette[i % orbitPalette.length]);
+      orbitColors.set([color.r, color.g, color.b], i * 3);
+    }
+    const orbitGeometry = new THREE.BufferGeometry();
+    orbitGeometry.setAttribute("position", new THREE.BufferAttribute(orbitPositions, 3));
+    orbitGeometry.setAttribute("color", new THREE.BufferAttribute(orbitColors, 3));
+    const orbitHaloMaterial = new THREE.PointsMaterial({ size: 0.12, map: softDotTex ?? undefined,
+      vertexColors: true, transparent: true, opacity: 0.44, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+    const orbitCoreMaterial = new THREE.PointsMaterial({ size: 0.034, map: softDotTex ?? undefined,
+      vertexColors: true, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+    if (cinematic) scene.add(new THREE.Points(orbitGeometry, orbitHaloMaterial), new THREE.Points(orbitGeometry, orbitCoreMaterial));
+
     // Ambient floating cosmic dust particles around astronaut at varying depths
-    const dustCount = 520;
+    const dustCount = 280;
     const dustPositions = new Float32Array(dustCount * 3);
     const dustSeeds = Array.from({ length: dustCount }, (_, i) => ({
       x: (((i * 73) % 100) / 100 - 0.5) * 6.4,
       y: (((i * 41) % 100) / 100 - 0.5) * 3.8,
-      z: (((i * 97) % 100) / 100 - 0.5) * 5.2 - 0.6,
+      z: -1.2 - ((i * 97) % 100) / 100 * 3.5,
       speed: 0.18 + ((i * 17) % 10) * 0.032,
       radius: 0.05 + ((i * 23) % 10) * 0.012,
     }));
@@ -875,15 +959,36 @@ export function BioTwin3DStage({
     dustGeo.setAttribute("position", new THREE.BufferAttribute(dustPositions, 3));
     const dustMat = new THREE.PointsMaterial({
       color: 0xbae6fd,
-      size: 0.024,
+      size: 0.017,
       map: softDotTex ?? undefined,
       transparent: true,
-      opacity: 0.58,
+      opacity: 0.24,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
     const cosmicDust = new THREE.Points(dustGeo, dustMat);
     scene.add(cosmicDust);
+
+    // A distant, slowly drifting arc of irregular rocks, with depth behind the BioTwin.
+    const asteroidBelt = new THREE.InstancedMesh(
+      new THREE.DodecahedronGeometry(0.018, 0),
+      new THREE.MeshStandardMaterial({ color: 0x3e6579, roughness: 1, metalness: 0.05, emissive: 0x2f8eb8, emissiveIntensity: 0.35, transparent: true, opacity: 0.48, depthWrite: false, fog: false }),
+      280,
+    );
+    const asteroidPose = new THREE.Object3D();
+    for (let i = 0; i < 280; i++) {
+      const angle = (i / 280) * Math.PI * 1.65 - 0.4;
+      const spread = (((i * 37) % 101) / 101 - 0.5);
+      const x = Math.cos(angle) * 5.5;
+      asteroidPose.position.set(x, Math.sin(angle) * 0.6 + x * 0.16 + spread * 0.3, -5.5 + Math.sin(angle) * 0.65 + spread * 0.6);
+      asteroidPose.rotation.set(i * 0.7, i * 1.1, i * 0.3);
+      asteroidPose.scale.setScalar(0.45 + ((i * 13) % 11) * 0.085);
+      asteroidPose.updateMatrix();
+      asteroidBelt.setMatrixAt(i, asteroidPose.matrix);
+    }
+    asteroidBelt.instanceMatrix.needsUpdate = true;
+    if (cinematic) scene.add(asteroidBelt);
+
 
     // 3D precision focus reticle orbiting the currently inspected organ
     const focusRingGroup = new THREE.Group();
@@ -905,13 +1010,16 @@ export function BioTwin3DStage({
     focusInnerRing.rotation.x = Math.PI / 3;
     focusRingGroup.add(focusOuterRing, focusInnerRing);
     focusRingGroup.position.copy(ORGAN_ANCHORS[liveRef.current.selectedSystem]);
-    scene.add(focusRingGroup);
+    anatomyRoot.add(focusRingGroup);
 
+    const revealUniform = { value: cinematic ? 0 : 1 };
+    let modelLoaded = false;
     // Holographic particle shell material (populated once GLB Outer_Body_Shell loads)
     const particleShellMaterial = new THREE.ShaderMaterial({
       vertexShader: PARTICLE_SHELL_VERTEX,
       fragmentShader: PARTICLE_SHELL_FRAGMENT,
       uniforms: {
+        uReveal: revealUniform,
         uTime: { value: 0 },
         uFocusPos: { value: ORGAN_ANCHORS[liveRef.current.selectedSystem].clone() },
         uAccentColor: { value: new THREE.Color("#2dd4bf") },
@@ -926,9 +1034,12 @@ export function BioTwin3DStage({
       vertexShader: FRESNEL_VERTEX_SHADER,
       fragmentShader: FRESNEL_FRAGMENT_SHADER,
       uniforms: {
+        uReveal: revealUniform,
         uTime: { value: 0 },
         uXrayDeep: { value: 0 },
         uTransitionScan: { value: 0 },
+        uHoverPoint: { value: new THREE.Vector3() },
+        uHoverStrength: { value: 0 },
         uFocusPos: { value: ORGAN_ANCHORS[liveRef.current.selectedSystem].clone() },
         uAccentColor: { value: new THREE.Color("#2dd4bf") },
       },
@@ -937,8 +1048,15 @@ export function BioTwin3DStage({
       side: THREE.FrontSide,
     });
 
+    const hoverPointTarget = new THREE.Vector3();
+    let hoverActive = false;
+    // Shared scan uniforms animate the actual organ surfaces, not only an overlay.
+    const organScan = { value: 0 };
+    const organScanStrength = { value: 0 };
+
     const skeletonMaterial = new THREE.ShaderMaterial({
       uniforms: {
+        uReveal: revealUniform,
         uOpacityScale: { value: 1.0 },
         uBoneFocus: { value: 0.0 },
       },
@@ -955,16 +1073,17 @@ export function BioTwin3DStage({
       fragmentShader: `
         uniform float uOpacityScale;
         uniform float uBoneFocus;
+        uniform float uReveal;
         varying vec3 vNormalW;
         varying vec3 vViewDir;
         void main() {
           float ndotv = clamp(abs(dot(normalize(vNormalW), normalize(vViewDir))), 0.0, 1.0);
           float rim = pow(1.0 - ndotv, 2.0);
           vec3 baseCol = mix(vec3(0.35, 0.45, 0.58), vec3(0.75, 0.86, 0.96), rim);
-          vec3 focusCol = mix(vec3(0.30, 0.55, 0.72), vec3(0.56, 0.88, 1.0), rim);
+          vec3 focusCol = mix(vec3(0.58, 0.56, 0.50), vec3(0.84, 0.82, 0.76), rim);
           vec3 col = mix(baseCol, focusCol, uBoneFocus * 0.65);
           float alpha = mix(0.025, 0.42 + uBoneFocus * 0.14, rim) * uOpacityScale;
-          gl_FragColor = vec4(col, alpha);
+          gl_FragColor = vec4(col, alpha * uReveal);
         }
       `,
       transparent: true,
@@ -982,7 +1101,7 @@ export function BioTwin3DStage({
     };
     for (const sysId of SYSTEM_ORDER) {
       pulseGroups[sysId].position.copy(ORGAN_ANCHORS[sysId]);
-      scene.add(pulseGroups[sysId]);
+      anatomyRoot.add(pulseGroups[sysId]);
     }
 
     const systemSubMeshes: Record<BodySystemId, SubMeshEntry[]> = {
@@ -1012,7 +1131,7 @@ export function BioTwin3DStage({
       depthWrite: false,
     });
     const fluidPoints = new THREE.Points(fluidGeo, fluidMat);
-    scene.add(fluidPoints);
+    anatomyRoot.add(fluidPoints);
 
     // 2) Ionizing Radiation SPE Streaks
     const radCount = 40;
@@ -1035,7 +1154,7 @@ export function BioTwin3DStage({
       depthWrite: false,
     });
     const radPoints = new THREE.Points(radGeo, radMat);
-    scene.add(radPoints);
+    anatomyRoot.add(radPoints);
 
     // 3) Bone-to-Kidney Calcium Ion Stream
     const caCount = 36;
@@ -1052,11 +1171,11 @@ export function BioTwin3DStage({
       depthWrite: false,
     });
     const caPoints = new THREE.Points(caGeo, caMat);
-    scene.add(caPoints);
+    anatomyRoot.add(caPoints);
 
     // 3D Cascade Spline Conduit Group
     const cascadeGroup = new THREE.Group();
-    scene.add(cascadeGroup);
+    anatomyRoot.add(cascadeGroup);
     const activeCascadeAnimators: Array<{
       curve: THREE.CatmullRomCurve3;
       pulseMesh: THREE.Mesh;
@@ -1293,14 +1412,13 @@ export function BioTwin3DStage({
           if (obj.name === "Outer_Body_Shell") {
             obj.material = shellMaterial;
             obj.renderOrder = 10;
-            scene.add(obj);
-
+            anatomyRoot.add(obj);
             // Sample Outer_Body_Shell vertices into holographic point-cloud layer
             const posAttr = obj.geometry.getAttribute("position");
             const normAttr = obj.geometry.getAttribute("normal");
             if (posAttr && normAttr) {
               const totalVerts = posAttr.count;
-              const maxPoints = 3200;
+              const maxPoints = 650;
               const stride = Math.max(1, Math.floor(totalVerts / maxPoints));
               const sampledPositions: number[] = [];
               const sampledNormals: number[] = [];
@@ -1327,7 +1445,7 @@ export function BioTwin3DStage({
               );
               const particleShell = new THREE.Points(pGeo, particleShellMaterial);
               particleShell.renderOrder = 11;
-              scene.add(particleShell);
+              anatomyRoot.add(particleShell);
             }
             continue;
           }
@@ -1341,7 +1459,7 @@ export function BioTwin3DStage({
             if (shellEnvelope) {
               containGeometryInsideShell(obj.geometry, shellEnvelope, 0.011);
             }
-            scene.add(obj);
+            anatomyRoot.add(obj);
             continue;
           }
 
@@ -1357,7 +1475,7 @@ export function BioTwin3DStage({
             obj.material = skeletonMaterial;
             obj.userData = { systemId: sysId, parsed };
             obj.renderOrder = 2;
-            scene.add(obj);
+            anatomyRoot.add(obj);
             organPickTargets.push(obj);
             continue;
           }
@@ -1380,22 +1498,33 @@ export function BioTwin3DStage({
             color: baseColor.clone(),
             emissive: baseColor.clone(),
             emissiveIntensity: isShell ? 0.14 : 0.26,
-            roughness: isShell ? 0.42 : 0.34,
+            roughness: isShell ? 0.68 : 0.58,
             metalness: 0.06,
-            clearcoat: 0.25,
+            clearcoat: 0.10,
             clearcoatRoughness: 0.3,
             transparent: true,
-            opacity: baseOpacity,
+            opacity: cinematic ? 0 : baseOpacity,
             depthWrite: false,
             side: isShell ? THREE.FrontSide : THREE.DoubleSide,
           });
           mat.onBeforeCompile = (shader) => {
+            shader.uniforms.uOrganScan = organScan;
+            shader.uniforms.uOrganScanStrength = organScanStrength;
+            shader.vertexShader = "varying vec3 vScanWorld;\n" + shader.vertexShader;
+            shader.vertexShader = shader.vertexShader.replace("#include <worldpos_vertex>",
+              "#include <worldpos_vertex>\nvScanWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+            shader.fragmentShader = "varying vec3 vScanWorld;\nuniform float uOrganScan;\nuniform float uOrganScanStrength;\n" + shader.fragmentShader;
             shader.fragmentShader = shader.fragmentShader.replace(
               "#include <dithering_fragment>",
               `
                 float holoRim = pow(1.0 - clamp(abs(dot(normalize(normal), normalize(vViewPosition))), 0.0, 1.0), 1.85);
-                gl_FragColor.rgb += totalEmissiveRadiance * holoRim * 0.9;
-                gl_FragColor.a = clamp(gl_FragColor.a * (0.34 + holoRim * 0.95), 0.04, 0.90);
+                gl_FragColor.rgb += totalEmissiveRadiance * holoRim * 0.12;
+                gl_FragColor.a = clamp(gl_FragColor.a * (0.72 + holoRim * 0.22), 0.0, 0.94);
+                float scanY = mix(1.04, -1.0, uOrganScan);
+                float scanned = smoothstep(scanY - 0.08, scanY + 0.08, vScanWorld.y);
+                float scanEdge = exp(-abs(vScanWorld.y - scanY) * 55.0);
+                gl_FragColor.a *= mix(1.0, 0.18 + scanned * 0.82, uOrganScanStrength);
+                gl_FragColor.rgb += vec3(0.30, 0.72, 0.90) * scanEdge * uOrganScanStrength * 0.7;
                 #include <dithering_fragment>
               `
             );
@@ -1406,7 +1535,7 @@ export function BioTwin3DStage({
           obj.renderOrder = isShell ? 6 : 4;
 
           if (parsed.isSystemicSpan) {
-            scene.add(obj);
+            anatomyRoot.add(obj);
           } else {
             // Re-center local organ geometry around its anatomical anchor so pulse scaling stays strictly in-place
             const anchor = ORGAN_ANCHORS[sysId];
@@ -1425,6 +1554,7 @@ export function BioTwin3DStage({
           organPickTargets.push(obj);
         }
 
+        modelLoaded = true;
         setLoadState("ready");
       },
       undefined,
@@ -1509,7 +1639,7 @@ export function BioTwin3DStage({
             } else {
               pendingArmBoneGroups.push(seg);
             }
-            scene.add(seg);
+            anatomyRoot.add(seg);
             addedCount++;
           }
         }
@@ -1535,7 +1665,7 @@ export function BioTwin3DStage({
     const pickSubStructure = (
       clientX: number,
       clientY: number
-    ): { mesh: THREE.Mesh; parsed: ParsedSubStructure } | null => {
+    ): { mesh: THREE.Mesh; parsed: ParsedSubStructure; point: THREE.Vector3 } | null => {
       if (organPickTargets.length === 0) return null;
       const rect = renderer.domElement.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return null;
@@ -1556,7 +1686,7 @@ export function BioTwin3DStage({
       const chosen = coreHit ?? hits[0];
       const parsed = chosen.object.userData.parsed as ParsedSubStructure | undefined;
       if (!parsed || !(chosen.object instanceof THREE.Mesh)) return null;
-      return { mesh: chosen.object, parsed };
+      return { mesh: chosen.object, parsed, point: chosen.point };
     };
 
     const handlePointerDown = (e: PointerEvent) => {
@@ -1582,8 +1712,14 @@ export function BioTwin3DStage({
     };
     window.addEventListener("pointermove", handleWindowPointerMove, { passive: true });
 
+    let lastPickAt = 0;
     const handlePointerMove = (e: PointerEvent) => {
+      const now = performance.now();
+      if (now - lastPickAt < 32) return;
+      lastPickAt = now;
       const hit = pickSubStructure(e.clientX, e.clientY);
+      hoverActive = Boolean(hit) && !storyProgressRef.current;
+      if (hit) hoverPointTarget.copy(hit.point);
       const nextName = hit ? hit.mesh.name : null;
       if (nextName === hoveredMeshNameRef.current) return;
 
@@ -1603,13 +1739,17 @@ export function BioTwin3DStage({
     };
 
     const handlePointerLeave = () => {
+      hoverActive = false;
+      parallaxTarget.set(0, 0);
       if (hoveredMeshNameRef.current === null) return;
       hoveredMeshNameRef.current = null;
       setIsHoveringOrgan(false);
       setHoveredInfo(null);
     };
+    window.addEventListener("blur", handlePointerLeave);
 
     const handlePointerUp = (e: PointerEvent) => {
+      if (!inspectEnabledRef.current) return;
       const moved = Math.hypot(
         e.clientX - pointerDownPos.x,
         e.clientY - pointerDownPos.y
@@ -1641,6 +1781,7 @@ export function BioTwin3DStage({
     renderer.domElement.addEventListener("pointerup", handlePointerUp);
 
     // ResizeObserver for crisp canvas sizing
+    let framingAspect = width / height;
     const resizeObserver = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) return;
@@ -1648,9 +1789,20 @@ export function BioTwin3DStage({
       const h = Math.max(entry.contentRect.height, 340);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      frameStory(w, h);
       renderer.setSize(w, h, false);
       composer.setSize(w, h);
       bloomPass.resolution.set(w, h);
+      if (cinematicRef.current && !storyProgressRef.current && Math.abs(framingAspect - w / h) > 0.05) {
+        framingAspect = w / h;
+        const preset = cameraPresetRef.current ?? "full";
+        const view = BRIEFING_VIEWS[preset];
+        const position = view.position.clone();
+        if (w / h < 0.85) {
+          position.sub(view.target).multiplyScalar(preset === "full" ? 1.38 : 1.55).add(view.target);
+        }
+        startCameraFly(position, view.target);
+      }
     });
     resizeObserver.observe(container);
 
@@ -1671,13 +1823,31 @@ export function BioTwin3DStage({
       const dt = Math.min(clock.getDelta(), 0.05);
       const t = reducedMotionRef.current ? 0 : clock.elapsedTime;
       const snapshot = liveRef.current;
+      revealUniform.value = cinematicRef.current ? THREE.MathUtils.damp(revealUniform.value, modelLoaded ? 1 : 0, 2.8, dt) : 1;
 
       // Update camera fly-to timeline (cubic ease-in-out along a shallow arc, no spring overshoot)
-      if (flyRef.current.active) {
-        flyRef.current.elapsed += dt;
+      const story = storyProgressRef.current;
+      const focus = story ? storyFocus(story.current) : null;
+      if (story) {
+        // Sample the same continuous curve at every frame. OrbitControls never rewrites this pose.
+        const idleTurn = reducedMotionRef.current ? 0 : Math.sin(t * 0.3) * 0.035 + Math.sin(story.current * 1.1) * 0.025;
+        const requestedTurn = modelRotationRef.current?.current ?? 0;
+        anatomyRoot.rotation.y = modelLoaded ? THREE.MathUtils.damp(anatomyRoot.rotation.y, requestedTurn + idleTurn, 5, dt) : 0;
+        anatomyRoot.updateMatrixWorld(true);
+        sampleBriefingPose(story.current, camera.position, storyTarget);
+        storyTarget.applyMatrix4(anatomyRoot.matrixWorld);
+        const portraitScale = camera.aspect < 0.85 ? 1.5 + (focus?.overview ?? 0) * 0.25 : 1;
+        const organMagnification = 1 - (1 - (focus?.overview ?? 1)) * 0.045;
+        camera.position.sub(storyTarget).multiplyScalar(portraitScale * organMagnification).add(storyTarget);
+        controls.target.copy(storyTarget);
+        camera.lookAt(storyTarget);
+        flyRef.current.active = false;
+        shellMaterial.uniforms.uTransitionScan.value = 0;
+        organScanStrength.value = 0;
+      } else if (flyRef.current.active) {
+        flyRef.current.elapsed = reducedMotionRef.current ? flyRef.current.duration : flyRef.current.elapsed + dt;
         const u = Math.min(1, flyRef.current.elapsed / flyRef.current.duration);
-        const eased =
-          u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+        const eased = easeInOutCubic(u);
         camera.position.lerpVectors(
           flyRef.current.startPos,
           flyRef.current.targetPos,
@@ -1685,9 +1855,10 @@ export function BioTwin3DStage({
         );
         // Subtle lateral/depth arc proportional to travel distance
         const flyDist = flyRef.current.startPos.distanceTo(flyRef.current.targetPos);
-        const arcOffset = Math.sin(eased * Math.PI) * Math.min(0.32, flyDist * 0.14);
-        camera.position.x += arcOffset * 0.65;
-        camera.position.z += arcOffset * 0.75;
+        const arcOffset = cameraArc(eased, flyDist);
+        camera.position.x += arcOffset * 0.8;
+        camera.position.y += arcOffset * 0.28;
+        camera.position.z += arcOffset * 0.7;
 
         controls.target.lerpVectors(
           flyRef.current.startLook,
@@ -1695,44 +1866,57 @@ export function BioTwin3DStage({
           eased
         );
         shellMaterial.uniforms.uTransitionScan.value = u;
+        organScan.value = u;
+        organScanStrength.value = reducedMotionRef.current ? 0 : Math.sin(Math.PI * u);
+        progressCallbackRef.current?.(u);
         if (u >= 1) {
           flyRef.current.active = false;
           shellMaterial.uniforms.uTransitionScan.value = 0;
+          organScanStrength.value = 0;
           onCameraTransitionEndRef.current?.();
         }
       } else {
         shellMaterial.uniforms.uTransitionScan.value = 0;
+        organScanStrength.value = 0;
       }
 
       controls.autoRotate =
         snapshot.autoRotate &&
+        !cinematicRef.current &&
         !flyRef.current.active &&
         !reducedMotionRef.current;
       controls.autoRotateSpeed = 0.72;
-      controls.update();
+      if (!story) controls.update();
 
       // Update Outer Shell Fresnel shader + skeletal opacity from active clinical viewing mode
       const effectiveMode = snapshot.effectiveMode;
       shellMaterial.uniforms.uTime.value = t;
-      shellMaterial.uniforms.uXrayDeep.value =
-        effectiveMode === "xray"
+      const xrayTarget = story ? 0.18 + (focus?.systems.musculoskeletal_renal ?? 0) * 0.65 : effectiveMode === "xray"
           ? 1.0
           : effectiveMode === "vascular"
             ? 0.88
             : 0.0;
-      skeletonMaterial.uniforms.uOpacityScale.value =
-        effectiveMode === "xray"
+      shellMaterial.uniforms.uXrayDeep.value = THREE.MathUtils.damp(
+        shellMaterial.uniforms.uXrayDeep.value, xrayTarget, 4, dt);
+      const skeletonTarget = story ? 0.16 + (focus?.overview ?? 0) * 0.34 + (focus?.systems.musculoskeletal_renal ?? 0) * 0.55 : effectiveMode === "xray"
           ? 1.25
           : effectiveMode === "vascular"
             ? 0.45
             : 0.95;
-      const boneFocused = snapshot.selectedSystem === "musculoskeletal_renal" ? 1.0 : 0.0;
+      skeletonMaterial.uniforms.uOpacityScale.value = THREE.MathUtils.damp(
+        skeletonMaterial.uniforms.uOpacityScale.value, skeletonTarget, 4, dt);
+      shellMaterial.uniforms.uHoverPoint.value.lerp(hoverPointTarget, 1 - Math.exp(-12 * dt));
+      shellMaterial.uniforms.uHoverStrength.value = THREE.MathUtils.damp(
+        shellMaterial.uniforms.uHoverStrength.value,
+        hoverActive && !flyRef.current.active && !reducedMotionRef.current ? 1 : 0, 8, dt);
+      const boneFocused = focus ? focus.systems.musculoskeletal_renal : snapshot.selectedSystem === "musculoskeletal_renal" ? 1.0 : 0.0;
       skeletonMaterial.uniforms.uBoneFocus.value +=
         (boneFocused - skeletonMaterial.uniforms.uBoneFocus.value) * 0.12;
       shellMaterial.uniforms.uFocusPos.value.lerp(
         ORGAN_ANCHORS[snapshot.selectedSystem],
         0.15
       );
+      if (story) shellMaterial.uniforms.uFocusPos.value.copy(storyTarget);
       const focusStatus = snapshot.assessments[snapshot.selectedSystem].status;
       targetColor.set(
         focusStatus === "green"
@@ -1741,6 +1925,19 @@ export function BioTwin3DStage({
       );
       shellMaterial.uniforms.uAccentColor.value.lerp(targetColor, 0.12);
       nebulaMaterial.uniforms.uTime.value = t;
+      if (cinematicRef.current) {
+        const positions = orbitGeometry.getAttribute("position") as THREE.BufferAttribute;
+        for (let i = 0; i < orbitCount; i++) {
+          const ring = i % 3;
+          const angle = i * 2.399963 + t * (0.034 + ring * 0.009) * (ring === 1 ? -1 : 1);
+          const radius = 2.7 + ring * 1.25;
+          const x = Math.cos(angle) * radius;
+          positions.setXYZ(i, x, 0.18 + Math.sin(angle) * (0.75 + ring * 0.22) + x * 0.10, -7.2 - ring * 0.45 + Math.sin(angle) * 0.75);
+        }
+        positions.needsUpdate = true;
+      }
+      asteroidBelt.rotation.y = t * 0.007;
+      asteroidBelt.rotation.z = Math.sin(t * 0.025) * 0.035;
       particleShellMaterial.uniforms.uTime.value = t;
       particleShellMaterial.uniforms.uFocusPos.value.copy(
         shellMaterial.uniforms.uFocusPos.value
@@ -1750,6 +1947,7 @@ export function BioTwin3DStage({
 
       // Update precision 3D focus reticle around selected organ
       focusRingGroup.position.lerp(ORGAN_ANCHORS[snapshot.selectedSystem], 0.14);
+      focusRingGroup.visible = !cinematicRef.current;
       focusOuterRing.quaternion.copy(camera.quaternion);
       focusInnerRing.rotation.z = t * 0.65;
       focusInnerRing.rotation.y = t * 0.42;
@@ -1797,7 +1995,7 @@ export function BioTwin3DStage({
           const lub = Math.exp(-Math.pow((phase - 0.14) * 11.0, 2.0));
           const dub = 0.6 * Math.exp(-Math.pow((phase - 0.34) * 12.0, 2.0));
           pulse = lub + dub;
-          group.scale.setScalar(1.0 + pulse * 0.055);
+          group.scale.setScalar(1.0 + pulse * (story ? 0.018 : 0.055));
         } else if (sysId === "immune_hematology") {
           // Thoracic respiratory lung cycle (~0.22 Hz)
           const breath = 0.5 + 0.5 * Math.sin(t * 1.4);
@@ -1883,9 +2081,13 @@ export function BioTwin3DStage({
                 : 0.22
               : 0.04;
           }
-          entry.material.opacity += (targetOpacity - entry.material.opacity) * 0.14;
+          if (focus) {
+            const weight = focus.systems[sysId];
+            targetOpacity = (isShell ? 0.002 : 0.003) + weight * (isShell ? 0.75 : 0.86) + focus.overview * (isShell ? 0.30 : 0.50);
+          }
+          entry.material.opacity = THREE.MathUtils.damp(entry.material.opacity, targetOpacity * revealUniform.value, 5, dt);
           entry.material.depthWrite = false;
-          entry.mesh.renderOrder = isVascularTissue && effectiveMode === "vascular" ? 8 : isShell ? 6 : 4;
+          entry.mesh.renderOrder = !story && isVascularTissue && effectiveMode === "vascular" ? 8 : isShell ? 6 : 4;
 
           const dimNonVascular = effectiveMode === "vascular" && !isVascularTissue;
           const dimNonFocal = !isOverview && !isSelected && effectiveMode !== "vascular";
@@ -1907,12 +2109,20 @@ export function BioTwin3DStage({
         }
       }
 
+      if (focus) {
+        for (const entry of allSubMeshes) {
+          entry.material.emissiveIntensity = 0.025 + focus.systems[entry.meta.systemId] * 0.10 + focus.overview * 0.035;
+          entry.material.color.lerp(entry.baseColor, 1 - Math.exp(-6 * dt));
+        }
+      }
+      cascadeGroup.visible = !story;
+      floorGroup.visible = !story;
       // Highlight hovered anatomical sub-structure from live raycast
       for (const entry of allSubMeshes) {
         if (entry.mesh.name === snapshot.hoveredMeshName) {
           entry.material.emissiveIntensity = Math.min(
             1.65,
-            entry.material.emissiveIntensity + 0.45
+            entry.material.emissiveIntensity + (story ? 0.045 : 0.18)
           );
         }
       }
@@ -1920,7 +2130,7 @@ export function BioTwin3DStage({
       // Update Cephalad Fluid Shift Particles along bilateral carotids (heart -> brain)
       const fAttr = fluidGeo.getAttribute("position") as THREE.BufferAttribute;
       const fluidIntensity = co2 > 3.4 || snapshot.assessments.neuro_ocular.status !== "green" ? 1.0 : 0.45;
-      fluidMat.opacity = 0.25 + fluidIntensity * 0.55;
+      fluidMat.opacity = focus ? focus.systems.neuro_ocular * 0.24 : 0.25 + fluidIntensity * 0.55;
       fluidMat.color.set(co2 > 3.5 ? 0xf87171 : 0x38bdf8);
       for (let i = 0; i < fluidCount; i++) {
         const side = i % 2 === 0 ? 1 : -1;
@@ -1935,7 +2145,7 @@ export function BioTwin3DStage({
       // Update Ionizing Radiation SPE Streaks
       const rAttr = radGeo.getAttribute("position") as THREE.BufferAttribute;
       const radActive = radMsv > 1.2 || snapshot.assessments.immune_hematology.status !== "green";
-      radMat.opacity = radActive ? Math.min(0.85, 0.25 + (radMsv - 0.8) * 0.22) : 0.08;
+      radMat.opacity = focus ? focus.systems.immune_hematology * 0.18 : radActive ? Math.min(0.85, 0.25 + (radMsv - 0.8) * 0.22) : 0.08;
       for (let i = 0; i < radCount; i++) {
         const seed = radSeeds[i];
         const prog = ((t * seed.speed + i * 0.13) % 1.0) - 0.5;
@@ -1954,7 +2164,7 @@ export function BioTwin3DStage({
         hydrationMl < 2100 ||
         !(snapshot.vitals?.aredExerciseCompleted ?? true) ||
         snapshot.assessments.musculoskeletal_renal.status !== "green";
-      caMat.opacity = caActive ? 0.82 : 0.0;
+      caMat.opacity = focus ? focus.systems.musculoskeletal_renal * 0.30 : caActive ? 0.82 : 0.0;
       if (caActive) {
         for (let i = 0; i < caCount; i++) {
           const side = i % 2 === 0 ? 1 : -1;
@@ -1979,17 +2189,19 @@ export function BioTwin3DStage({
       }
 
       // Apply damped cursor parallax offset temporarily for render + 2D pill projection
-      if (enableParallaxRef.current) {
+      if (enableParallaxRef.current && !reducedMotionRef.current) {
         parallaxCurrent.lerp(parallaxTarget, 1 - Math.exp(-4.5 * dt));
       } else {
         parallaxCurrent.lerp(new THREE.Vector2(0, 0), 1 - Math.exp(-6.0 * dt));
       }
+      const drift = cinematicRef.current && !flyRef.current.active && !inspectEnabledRef.current && !reducedMotionRef.current;
+      const motionScale = flyRef.current.active ? 0.25 : 1;
       camRight
         .setFromMatrixColumn(camera.matrixWorld, 0)
-        .multiplyScalar(parallaxCurrent.x * 0.065);
+        .multiplyScalar(parallaxCurrent.x * 0.055 * motionScale + (drift ? Math.sin(t * 0.25) * 0.018 : 0));
       camUp
         .setFromMatrixColumn(camera.matrixWorld, 1)
-        .multiplyScalar(parallaxCurrent.y * 0.04);
+        .multiplyScalar(parallaxCurrent.y * 0.035 * motionScale + (drift ? Math.sin(t * 0.32) * 0.007 : 0));
       camera.position.add(camRight).add(camUp);
       camera.updateMatrixWorld();
 
@@ -1998,6 +2210,13 @@ export function BioTwin3DStage({
       // Project 3D organ anchors to 2D callout pill positions via refs (zero React re-renders)
       const cw = container.clientWidth;
       const ch = container.clientHeight;
+      projectedVec.copy(ORGAN_ANCHORS[snapshot.selectedSystem]).applyMatrix4(anatomyRoot.matrixWorld).project(camera);
+      projectionCallbackRef.current?.({
+        x: (projectedVec.x * 0.5 + 0.5) * cw,
+        y: (-projectedVec.y * 0.5 + 0.5) * ch,
+        width: cw, height: ch,
+        visible: projectedVec.z >= -1 && projectedVec.z <= 1 && Math.abs(projectedVec.x) < 0.92 && Math.abs(projectedVec.y) < 0.9,
+      });
       for (const sysId of SYSTEM_ORDER) {
         const pillEl = pillRefs.current[sysId];
         if (!pillEl) continue;
@@ -2010,7 +2229,7 @@ export function BioTwin3DStage({
           pillEl.style.pointerEvents = "none";
           continue;
         }
-        projectedVec.copy(ORGAN_ANCHORS[sysId]).project(camera);
+        projectedVec.copy(ORGAN_ANCHORS[sysId]).applyMatrix4(anatomyRoot.matrixWorld).project(camera);
         if (
           projectedVec.z > 1 ||
           Math.abs(projectedVec.y) > 0.94 ||
@@ -2031,7 +2250,7 @@ export function BioTwin3DStage({
         pillEl.style.transform = `translate3d(${clampedX.toFixed(1)}px, ${clampedY.toFixed(1)}px, 0)`;
       }
 
-      // Restore camera position so OrbitControls never drifts
+      // Restore the base trajectory; cursor influence never accumulates into a new pose.
       camera.position.sub(camRight).sub(camUp);
     };
 
@@ -2045,6 +2264,7 @@ export function BioTwin3DStage({
       controlsRef.current = null;
       controls.dispose();
       window.removeEventListener("pointermove", handleWindowPointerMove);
+      window.removeEventListener("blur", handlePointerLeave);
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);
       renderer.domElement.removeEventListener("pointerleave", handlePointerLeave);
@@ -2061,7 +2281,9 @@ export function BioTwin3DStage({
       });
       composer.dispose();
       bloomPass.dispose();
+      if (!cinematic) { asteroidBelt.geometry.dispose(); (asteroidBelt.material as THREE.Material).dispose(); }
       softDotTex?.dispose();
+      if (!cinematic) { orbitGeometry.dispose(); orbitHaloMaterial.dispose(); orbitCoreMaterial.dispose(); }
       renderer.dispose();
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement);
@@ -2078,7 +2300,7 @@ export function BioTwin3DStage({
   return (
     <div
       ref={containerRef}
-      className={`relative h-[440px] w-full min-w-0 overflow-hidden rounded-2xl lg:h-full ${
+      className={`relative w-full min-w-0 overflow-hidden ${cinematic ? "h-full" : "h-[440px] rounded-2xl lg:h-full"} ${
         isHoveringOrgan
           ? "cursor-crosshair"
           : "cursor-grab active:cursor-grabbing"
