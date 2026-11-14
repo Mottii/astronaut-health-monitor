@@ -282,9 +282,7 @@ export function BioTwinBodyMap({
                 />
 
                 {/* Label pill offset left/right cleanly */}
-                <title>
-                  {meta.name} — {assessment.headline}
-                </title>
+                <title>{`${meta.name} — ${assessment.headline}`}</title>
               </g>
             );
           })}
