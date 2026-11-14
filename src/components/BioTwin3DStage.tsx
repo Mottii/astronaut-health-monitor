@@ -4,6 +4,11 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { BODY_SYSTEM_METADATA } from "@/data/nasaHrpData";
 import type {
   BodySystemId,
@@ -28,6 +33,14 @@ export interface BioTwin3DStageProps {
   xrayIntensity?: "normal" | "deep";
   autoRotate: boolean;
   cameraResetToken: number;
+  /** Optional explicit camera target ("full" or specific organ) for presentation mode */
+  cameraPreset?: "full" | BodySystemId;
+  /** Enable subtle cursor parallax on the 3D camera */
+  enableParallax?: boolean;
+  /** Allow mouse-wheel zoom on OrbitControls (disable during scroll presentation) */
+  allowWheelZoom?: boolean;
+  /** Hide bottom-left surgical raycast card (used when PresentationView draws its own corner HUD) */
+  hideBottomHud?: boolean;
 }
 
 interface ParsedSubStructure {
@@ -157,40 +170,40 @@ const ORGAN_ANCHORS: Record<BodySystemId, THREE.Vector3> = {
   musculoskeletal_renal: new THREE.Vector3(0.068, 0.295, -0.022),
 };
 
-// Optimal inspection camera offset per organ system
+// Optimal inspection camera offset per organ system (slightly lowered target.y so organs sit cleanly above bottom slide titles)
 const ORGAN_CAMERA_VIEWS: Record<
   BodySystemId,
   { target: THREE.Vector3; position: THREE.Vector3 }
 > = {
   neuro_ocular: {
-    target: new THREE.Vector3(0.0, 0.815, 0.015),
-    position: new THREE.Vector3(0.22, 0.84, 0.72),
+    target: new THREE.Vector3(0.0, 0.77, 0.015),
+    position: new THREE.Vector3(0.22, 0.82, 0.76),
   },
   behavioral_circadian: {
-    target: new THREE.Vector3(0.0, 0.83, 0.005),
-    position: new THREE.Vector3(-0.24, 0.88, 0.72),
+    target: new THREE.Vector3(0.0, 0.785, 0.005),
+    position: new THREE.Vector3(-0.24, 0.85, 0.76),
   },
   cardiovascular: {
-    target: new THREE.Vector3(0.015, 0.48, 0.025),
-    position: new THREE.Vector3(0.24, 0.52, 0.86),
+    target: new THREE.Vector3(0.015, 0.43, 0.025),
+    position: new THREE.Vector3(0.24, 0.49, 0.90),
   },
   immune_hematology: {
-    target: new THREE.Vector3(0.0, 0.50, 0.005),
-    position: new THREE.Vector3(-0.26, 0.54, 0.94),
+    target: new THREE.Vector3(0.0, 0.45, 0.005),
+    position: new THREE.Vector3(-0.26, 0.51, 0.96),
   },
   metabolic_endocrine: {
-    target: new THREE.Vector3(-0.01, 0.32, 0.02),
-    position: new THREE.Vector3(-0.26, 0.38, 0.96),
+    target: new THREE.Vector3(-0.01, 0.27, 0.02),
+    position: new THREE.Vector3(-0.26, 0.34, 0.98),
   },
   musculoskeletal_renal: {
-    target: new THREE.Vector3(0.0, 0.20, -0.01),
-    position: new THREE.Vector3(0.32, 0.28, 1.18),
+    target: new THREE.Vector3(0.0, 0.15, -0.01),
+    position: new THREE.Vector3(0.32, 0.24, 1.20),
   },
 };
 
 const FULL_BODY_VIEW = {
-  target: new THREE.Vector3(0.0, 0.0, 0.0),
-  position: new THREE.Vector3(0.18, 0.12, 2.85),
+  target: new THREE.Vector3(0.0, -0.04, 0.0),
+  position: new THREE.Vector3(0.18, 0.10, 2.90),
 };
 
 const FRESNEL_VERTEX_SHADER = `
@@ -221,31 +234,187 @@ const FRESNEL_FRAGMENT_SHADER = `
     vec3 N = normalize(vNormalW);
     vec3 V = normalize(vViewDir);
     float ndotv = clamp(abs(dot(N, V)), 0.0, 1.0);
-    float fresnel = pow(1.0 - ndotv, 2.45);
+    float fresnel = pow(1.0 - ndotv, 2.25);
 
-    // Subtle surgical scanlines + slow vertical telemetry sweep
-    float scanline = 0.5 + 0.5 * sin(vWorldPos.y * 165.0 - uTime * 1.6);
-    float sweepY = mod(uTime * 0.42, 2.1) - 1.0;
-    float sweep = exp(-abs(vWorldPos.y - sweepY) * 26.0);
+    // Dual surgical scanlines + holographic topographic micro-grid
+    float scanline = 0.5 + 0.5 * sin(vWorldPos.y * 190.0 - uTime * 1.8);
+    float gridY = smoothstep(0.92, 0.99, abs(sin(vWorldPos.y * 42.0)));
+    float gridX = smoothstep(0.94, 0.995, abs(sin(vWorldPos.x * 42.0 + vWorldPos.z * 42.0)));
+    float holoGrid = max(gridY, gridX) * 0.28;
+
+    float sweepY = mod(uTime * 0.45, 2.2) - 1.05;
+    float sweep = exp(-abs(vWorldPos.y - sweepY) * 28.0);
 
     // Spherical X-Ray window centered around inspected organ
     float distToFocus = distance(vWorldPos, uFocusPos);
-    float focusWindow = smoothstep(0.10, 0.36, distToFocus);
+    float focusWindow = smoothstep(0.08, 0.34, distToFocus);
 
-    vec3 obsidianBase = vec3(0.035, 0.04, 0.055);
-    vec3 silverRim = vec3(0.84, 0.89, 0.96);
-    vec3 col = mix(obsidianBase, silverRim, fresnel * 0.88);
-    col += uAccentColor * (sweep * 0.24 + (1.0 - focusWindow) * fresnel * 0.20);
-    col += vec3(0.035) * scanline * fresnel;
+    vec3 obsidianBase = vec3(0.025, 0.032, 0.048);
+    vec3 cyanRim = vec3(0.28, 0.78, 0.98);
+    vec3 silverRim = vec3(0.88, 0.94, 1.0);
+    vec3 rimCol = mix(cyanRim, silverRim, fresnel);
+    vec3 col = mix(obsidianBase, rimCol, fresnel * 0.92);
+    col += uAccentColor * (sweep * 0.32 + (1.0 - focusWindow) * fresnel * 0.28);
+    col += rimCol * holoGrid * (0.35 + fresnel * 0.65);
+    col += vec3(0.05, 0.09, 0.14) * scanline * fresnel;
 
-    float baseAlpha = mix(0.028, 0.52, fresnel);
-    float cutoutAlpha = mix(0.22, 1.0, focusWindow);
-    float depthFactor = mix(1.0, 0.44, uXrayDeep);
-    float alpha = clamp(baseAlpha * cutoutAlpha * depthFactor + sweep * 0.05, 0.015, 0.68);
+    float baseAlpha = mix(0.018, 0.54, fresnel) + holoGrid * 0.08;
+    float cutoutAlpha = mix(0.14, 1.0, focusWindow);
+    float depthFactor = mix(1.0, 0.42, uXrayDeep);
+    float alpha = clamp(baseAlpha * cutoutAlpha * depthFactor + sweep * 0.06, 0.012, 0.72);
 
     gl_FragColor = vec4(col, alpha);
   }
 `;
+
+const NEBULA_VERTEX_SHADER = `
+  varying vec3 vDir;
+  void main() {
+    vDir = normalize(position);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const NEBULA_FRAGMENT_SHADER = `
+  uniform float uTime;
+  uniform vec3 uAccentColor;
+  varying vec3 vDir;
+
+  float hash(vec3 p) {
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+  }
+
+  void main() {
+    float waveA = sin(vDir.x * 4.5 + uTime * 0.12) * cos(vDir.y * 3.8 - uTime * 0.09);
+    float waveB = sin((vDir.z + vDir.y) * 6.0 + uTime * 0.16);
+    float neb = clamp(0.5 + 0.35 * waveA + 0.25 * waveB, 0.0, 1.0);
+
+    vec3 deepSpace = vec3(0.022, 0.026, 0.038);
+    vec3 indigoMist = vec3(0.045, 0.075, 0.14);
+    vec3 col = mix(deepSpace, indigoMist, pow(neb, 2.0));
+    col += uAccentColor * (0.045 * pow(neb, 3.0) * (1.0 - abs(vDir.y)));
+
+    // Subtle crisp starfield
+    vec3 cell = floor(vDir * 145.0);
+    float star = step(0.994, hash(cell));
+    float twinkle = 0.55 + 0.45 * sin(uTime * 1.8 + hash(cell) * 24.0);
+    col += vec3(0.75, 0.88, 1.0) * star * twinkle * 0.42;
+
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+const PARTICLE_SHELL_VERTEX = `
+  uniform float uTime;
+  uniform vec3 uFocusPos;
+  varying float vFocusGlow;
+
+  void main() {
+    vec3 pos = position;
+    float wave = sin(pos.y * 12.0 + uTime * 1.7 + pos.x * 8.0) * 0.0025;
+    pos += normal * wave;
+
+    float dist = distance(pos, uFocusPos);
+    vFocusGlow = 1.0 - smoothstep(0.05, 0.32, dist);
+
+    vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
+    gl_PointSize = clamp((2.6 + vFocusGlow * 2.2) / max(-mvPos.z, 0.45), 1.4, 5.0);
+    gl_Position = projectionMatrix * mvPos;
+  }
+`;
+
+const PARTICLE_SHELL_FRAGMENT = `
+  uniform vec3 uAccentColor;
+  varying float vFocusGlow;
+
+  void main() {
+    float d = length(gl_PointCoord - vec2(0.5));
+    if (d > 0.5) discard;
+    float alpha = smoothstep(0.5, 0.08, d) * (0.34 + vFocusGlow * 0.48);
+    vec3 col = mix(vec3(0.45, 0.82, 0.98), uAccentColor, vFocusGlow * 0.75);
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
+
+const CASCADE_FLOW_VERTEX = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const CASCADE_FLOW_FRAGMENT = `
+  uniform float uTime;
+  uniform float uSpeed;
+  uniform vec3 uColor;
+  varying vec2 vUv;
+
+  void main() {
+    float flow = fract(vUv.x * 3.0 - uTime * uSpeed);
+    float pulse = exp(-pow((flow - 0.5) * 6.5, 2.0));
+    float base = 0.22;
+    vec3 col = mix(uColor, vec3(1.0), pulse * 0.75);
+    float alpha = clamp(base + pulse * 0.78, 0.0, 0.95);
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
+
+const CINEMA_POST_SHADER = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTime: { value: 0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    varying vec2 vUv;
+
+    float rand(vec2 co) {
+      return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    void main() {
+      vec2 offset = (vUv - 0.5) * 0.0022;
+      float r = texture2D(tDiffuse, vUv + offset).r;
+      float g = texture2D(tDiffuse, vUv).g;
+      float b = texture2D(tDiffuse, vUv - offset).b;
+      vec3 col = vec3(r, g, b);
+
+      float grain = (rand(vUv + fract(uTime)) - 0.5) * 0.028;
+      col += grain;
+
+      gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+    }
+  `,
+};
+
+function createSoftDotTexture(): THREE.CanvasTexture | null {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.35, "rgba(255,255,255,0.75)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  return tex;
+}
 
 function formatStructureLabel(raw: string): string {
   return raw
@@ -306,6 +475,10 @@ export function BioTwin3DStage({
   xrayIntensity = "normal",
   autoRotate,
   cameraResetToken,
+  cameraPreset,
+  enableParallax = true,
+  allowWheelZoom = true,
+  hideBottomHud = false,
 }: BioTwin3DStageProps) {
   const effectiveMode: ClinicalVisualMode =
     visualMode ?? (xrayIntensity === "deep" ? "xray" : "atlas");
@@ -355,6 +528,9 @@ export function BioTwin3DStage({
   const cascadesRef = useRef<CascadeLink[]>(cascades);
   cascadesRef.current = cascades;
   const rebuildCascadesRef = useRef<(() => void) | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
+  const enableParallaxRef = useRef(enableParallax);
+  enableParallaxRef.current = enableParallax;
 
   useEffect(() => {
     setClickedInfo((prev) =>
@@ -400,6 +576,25 @@ export function BioTwin3DStage({
     };
   }, [cameraResetToken]);
 
+  // Explicit camera preset override (used by presentation slides)
+  useEffect(() => {
+    if (!cameraPreset) return;
+    const view =
+      cameraPreset === "full" ? FULL_BODY_VIEW : ORGAN_CAMERA_VIEWS[cameraPreset];
+    flyRef.current = {
+      active: true,
+      targetPos: view.position.clone(),
+      targetLook: view.target.clone(),
+    };
+  }, [cameraPreset]);
+
+  // Sync wheel zoom permission without re-initializing WebGL
+  useEffect(() => {
+    if (controlsRef.current) {
+      controlsRef.current.enableZoom = allowWheelZoom;
+    }
+  }, [allowWheelZoom]);
+
   // Rebuild 3D cascade spline conduits whenever active cascades change
   useEffect(() => {
     rebuildCascadesRef.current?.();
@@ -432,14 +627,35 @@ export function BioTwin3DStage({
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
+    scene.background = new THREE.Color("#06070a");
+    scene.fog = new THREE.FogExp2("#06070a", 0.19);
 
     const camera = new THREE.PerspectiveCamera(38, width / height, 0.05, 30);
     camera.position.copy(FULL_BODY_VIEW.position);
 
+    const composer = new EffectComposer(renderer);
+    composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    composer.setSize(width, height);
+    const renderPass = new RenderPass(scene, camera);
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(width, height),
+      0.38,
+      0.55,
+      0.72
+    );
+    const outputPass = new OutputPass();
+    const cinemaPass = new ShaderPass(CINEMA_POST_SHADER);
+    composer.addPass(renderPass);
+    composer.addPass(bloomPass);
+    composer.addPass(outputPass);
+    composer.addPass(cinemaPass);
+
     const controls = new OrbitControls(camera, renderer.domElement);
+    controlsRef.current = controls;
     controls.target.copy(FULL_BODY_VIEW.target);
     controls.enableDamping = true;
     controls.dampingFactor = 0.07;
+    controls.enableZoom = allowWheelZoom;
     controls.minDistance = 0.55;
     controls.maxDistance = 4.2;
     controls.maxPolarAngle = Math.PI * 0.92;
@@ -467,7 +683,7 @@ export function BioTwin3DStage({
     underFill.position.set(0, -1.1, 0.8);
     scene.add(underFill);
 
-    // Architectural concentric floor grid rings under feet (skin soles sit at y = -0.913)
+    // Architectural concentric floor grid rings + living particle sea under feet (skin soles sit at y = -0.913)
     const floorGroup = new THREE.Group();
     floorGroup.position.y = -0.915;
     for (const [radius, opacity] of [
@@ -478,14 +694,137 @@ export function BioTwin3DStage({
       const ringGeo = new THREE.RingGeometry(radius - 0.0025, radius, 72);
       ringGeo.rotateX(-Math.PI / 2);
       const ringMat = new THREE.MeshBasicMaterial({
-        color: 0xffffff,
+        color: 0xbae6fd,
         transparent: true,
         opacity,
         side: THREE.DoubleSide,
       });
       floorGroup.add(new THREE.Mesh(ringGeo, ringMat));
     }
+
+    const floorParticleCount = 900;
+    const floorParticlePositions = new Float32Array(floorParticleCount * 3);
+    const floorParticleBase = new Float32Array(floorParticleCount * 2);
+    const floorParticleColors = new Float32Array(floorParticleCount * 3);
+    const cyanColor = new THREE.Color("#38bdf8");
+    const iceColor = new THREE.Color("#e2e8f0");
+    for (let i = 0; i < floorParticleCount; i++) {
+      const angle = (i * 2.3999632) % (Math.PI * 2); // golden-angle spiral
+      const norm = (i + 0.5) / floorParticleCount;
+      const radius = 0.28 + Math.sqrt(norm) * 3.35;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      floorParticlePositions[i * 3] = x;
+      floorParticlePositions[i * 3 + 1] = 0;
+      floorParticlePositions[i * 3 + 2] = z;
+      floorParticleBase[i * 2] = radius;
+      floorParticleBase[i * 2 + 1] = angle;
+
+      const mixCol = i % 3 === 0 ? iceColor : cyanColor;
+      floorParticleColors[i * 3] = mixCol.r;
+      floorParticleColors[i * 3 + 1] = mixCol.g;
+      floorParticleColors[i * 3 + 2] = mixCol.b;
+    }
+    const softDotTex = createSoftDotTexture();
+
+    const floorParticleGeo = new THREE.BufferGeometry();
+    floorParticleGeo.setAttribute(
+      "position",
+      new THREE.BufferAttribute(floorParticlePositions, 3)
+    );
+    floorParticleGeo.setAttribute(
+      "color",
+      new THREE.BufferAttribute(floorParticleColors, 3)
+    );
+    const floorParticleMat = new THREE.PointsMaterial({
+      size: 0.026,
+      map: softDotTex ?? undefined,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.72,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const floorParticles = new THREE.Points(floorParticleGeo, floorParticleMat);
+    floorGroup.add(floorParticles);
     scene.add(floorGroup);
+
+    // Procedural deep-space nebula & starfield dome (strictly cool obsidian/cyan palette, never red)
+    const nebulaMaterial = new THREE.ShaderMaterial({
+      vertexShader: NEBULA_VERTEX_SHADER,
+      fragmentShader: NEBULA_FRAGMENT_SHADER,
+      uniforms: {
+        uTime: { value: 0 },
+        uAccentColor: { value: new THREE.Color("#0ea5e9") },
+      },
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+    });
+    const nebulaDome = new THREE.Mesh(
+      new THREE.SphereGeometry(14, 32, 24),
+      nebulaMaterial
+    );
+    scene.add(nebulaDome);
+
+    // Ambient floating cosmic dust particles around astronaut
+    const dustCount = 220;
+    const dustPositions = new Float32Array(dustCount * 3);
+    const dustSeeds = Array.from({ length: dustCount }, (_, i) => ({
+      x: (((i * 73) % 100) / 100 - 0.5) * 4.2,
+      y: (((i * 41) % 100) / 100 - 0.5) * 2.8,
+      z: (((i * 97) % 100) / 100 - 0.5) * 3.2,
+      speed: 0.25 + ((i * 17) % 10) * 0.04,
+    }));
+    const dustGeo = new THREE.BufferGeometry();
+    dustGeo.setAttribute("position", new THREE.BufferAttribute(dustPositions, 3));
+    const dustMat = new THREE.PointsMaterial({
+      color: 0xbae6fd,
+      size: 0.02,
+      map: softDotTex ?? undefined,
+      transparent: true,
+      opacity: 0.45,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const cosmicDust = new THREE.Points(dustGeo, dustMat);
+    scene.add(cosmicDust);
+
+    // 3D precision focus reticle orbiting the currently inspected organ
+    const focusRingGroup = new THREE.Group();
+    const focusOuterMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.48,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const focusOuterRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.115, 0.119, 48),
+      focusOuterMat
+    );
+    const focusInnerRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.082, 0.085, 48),
+      focusOuterMat
+    );
+    focusInnerRing.rotation.x = Math.PI / 3;
+    focusRingGroup.add(focusOuterRing, focusInnerRing);
+    focusRingGroup.position.copy(ORGAN_ANCHORS[liveRef.current.selectedSystem]);
+    scene.add(focusRingGroup);
+
+    // Holographic particle shell material (populated once GLB Outer_Body_Shell loads)
+    const particleShellMaterial = new THREE.ShaderMaterial({
+      vertexShader: PARTICLE_SHELL_VERTEX,
+      fragmentShader: PARTICLE_SHELL_FRAGMENT,
+      uniforms: {
+        uTime: { value: 0 },
+        uFocusPos: { value: ORGAN_ANCHORS[liveRef.current.selectedSystem].clone() },
+        uAccentColor: { value: new THREE.Color("#2dd4bf") },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
 
     // Custom Fresnel X-Ray ShaderMaterial for Outer_Body_Shell
     const shellMaterial = new THREE.ShaderMaterial({
@@ -544,9 +883,10 @@ export function BioTwin3DStage({
     fluidGeo.setAttribute("position", new THREE.BufferAttribute(fluidPositions, 3));
     const fluidMat = new THREE.PointsMaterial({
       color: 0x38bdf8,
-      size: 0.014,
+      size: 0.022,
+      map: softDotTex ?? undefined,
       transparent: true,
-      opacity: 0.75,
+      opacity: 0.8,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
@@ -566,7 +906,8 @@ export function BioTwin3DStage({
     radGeo.setAttribute("position", new THREE.BufferAttribute(radPositions, 3));
     const radMat = new THREE.PointsMaterial({
       color: 0xc084fc,
-      size: 0.015,
+      size: 0.024,
+      map: softDotTex ?? undefined,
       transparent: true,
       opacity: 0.0,
       blending: THREE.AdditiveBlending,
@@ -582,7 +923,8 @@ export function BioTwin3DStage({
     caGeo.setAttribute("position", new THREE.BufferAttribute(caPositions, 3));
     const caMat = new THREE.PointsMaterial({
       color: 0xfbbf24,
-      size: 0.013,
+      size: 0.021,
+      map: softDotTex ?? undefined,
       transparent: true,
       opacity: 0.0,
       blending: THREE.AdditiveBlending,
@@ -597,6 +939,7 @@ export function BioTwin3DStage({
     const activeCascadeAnimators: Array<{
       curve: THREE.CatmullRomCurve3;
       pulseMesh: THREE.Mesh;
+      tubeMat: THREE.ShaderMaterial;
       speedOffset: number;
     }> = [];
 
@@ -628,16 +971,23 @@ export function BioTwin3DStage({
           mid,
           toPos.clone(),
         ]);
-        const tubeGeo = new THREE.TubeGeometry(curve, 36, 0.005, 8, false);
+        const tubeGeo = new THREE.TubeGeometry(curve, 44, 0.0045, 8, false);
         const colorHex = cascade.severity === "red" ? 0xf87171 : 0xfbbf24;
-        const tubeMat = new THREE.MeshBasicMaterial({
-          color: colorHex,
+        const tubeMat = new THREE.ShaderMaterial({
+          vertexShader: CASCADE_FLOW_VERTEX,
+          fragmentShader: CASCADE_FLOW_FRAGMENT,
+          uniforms: {
+            uTime: { value: 0 },
+            uSpeed: { value: cascade.severity === "red" ? 1.15 : 0.75 },
+            uColor: { value: new THREE.Color(colorHex) },
+          },
           transparent: true,
-          opacity: 0.55,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
         });
         cascadeGroup.add(new THREE.Mesh(tubeGeo, tubeMat));
 
-        const pulseGeo = new THREE.SphereGeometry(0.013, 12, 12);
+        const pulseGeo = new THREE.SphereGeometry(0.011, 12, 12);
         const pulseMat = new THREE.MeshBasicMaterial({
           color: 0xffffff,
         });
@@ -647,6 +997,7 @@ export function BioTwin3DStage({
         activeCascadeAnimators.push({
           curve,
           pulseMesh,
+          tubeMat,
           speedOffset: idx * 0.27,
         });
       });
@@ -684,6 +1035,41 @@ export function BioTwin3DStage({
             obj.material = shellMaterial;
             obj.renderOrder = 10;
             scene.add(obj);
+
+            // Sample Outer_Body_Shell vertices into holographic point-cloud layer
+            const posAttr = obj.geometry.getAttribute("position");
+            const normAttr = obj.geometry.getAttribute("normal");
+            if (posAttr && normAttr) {
+              const totalVerts = posAttr.count;
+              const maxPoints = 3200;
+              const stride = Math.max(1, Math.floor(totalVerts / maxPoints));
+              const sampledPositions: number[] = [];
+              const sampledNormals: number[] = [];
+              for (let idx = 0; idx < totalVerts; idx += stride) {
+                sampledPositions.push(
+                  posAttr.getX(idx),
+                  posAttr.getY(idx),
+                  posAttr.getZ(idx)
+                );
+                sampledNormals.push(
+                  normAttr.getX(idx),
+                  normAttr.getY(idx),
+                  normAttr.getZ(idx)
+                );
+              }
+              const pGeo = new THREE.BufferGeometry();
+              pGeo.setAttribute(
+                "position",
+                new THREE.Float32BufferAttribute(sampledPositions, 3)
+              );
+              pGeo.setAttribute(
+                "normal",
+                new THREE.Float32BufferAttribute(sampledNormals, 3)
+              );
+              const particleShell = new THREE.Points(pGeo, particleShellMaterial);
+              particleShell.renderOrder = 11;
+              scene.add(particleShell);
+            }
             continue;
           }
           if (obj.name === "Skeletal_Frame") {
@@ -788,6 +1174,25 @@ export function BioTwin3DStage({
       pointerDownPos.set(e.clientX, e.clientY);
     };
 
+    const parallaxTarget = new THREE.Vector2(0, 0);
+    const parallaxCurrent = new THREE.Vector2(0, 0);
+    const camRight = new THREE.Vector3();
+    const camUp = new THREE.Vector3();
+
+    const handleWindowPointerMove = (e: PointerEvent) => {
+      if (!enableParallaxRef.current) {
+        parallaxTarget.set(0, 0);
+        return;
+      }
+      const nx = (e.clientX / Math.max(window.innerWidth, 1)) * 2 - 1;
+      const ny = -((e.clientY / Math.max(window.innerHeight, 1)) * 2 - 1);
+      parallaxTarget.set(
+        Math.max(-1, Math.min(1, nx)),
+        Math.max(-1, Math.min(1, ny))
+      );
+    };
+    window.addEventListener("pointermove", handleWindowPointerMove, { passive: true });
+
     const handlePointerMove = (e: PointerEvent) => {
       const hit = pickSubStructure(e.clientX, e.clientY);
       const nextName = hit ? hit.mesh.name : null;
@@ -848,6 +1253,8 @@ export function BioTwin3DStage({
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h, false);
+      composer.setSize(w, h);
+      bloomPass.resolution.set(w, h);
     });
     resizeObserver.observe(container);
 
@@ -907,6 +1314,43 @@ export function BioTwin3DStage({
           : STATUS_COLOR_HEX[focusStatus]
       );
       shellMaterial.uniforms.uAccentColor.value.lerp(targetColor, 0.12);
+      nebulaMaterial.uniforms.uTime.value = t;
+      particleShellMaterial.uniforms.uTime.value = t;
+      particleShellMaterial.uniforms.uFocusPos.value.copy(
+        shellMaterial.uniforms.uFocusPos.value
+      );
+      particleShellMaterial.uniforms.uAccentColor.value.lerp(targetColor, 0.12);
+      cinemaPass.uniforms.uTime.value = t;
+
+      // Update precision 3D focus reticle around selected organ
+      focusRingGroup.position.lerp(ORGAN_ANCHORS[snapshot.selectedSystem], 0.14);
+      focusOuterRing.quaternion.copy(camera.quaternion);
+      focusInnerRing.rotation.z = t * 0.65;
+      focusInnerRing.rotation.y = t * 0.42;
+      focusOuterMat.color.lerp(targetColor, 0.14);
+
+      // Update ambient cosmic dust drift
+      const dAttr = dustGeo.getAttribute("position") as THREE.BufferAttribute;
+      for (let i = 0; i < dustCount; i++) {
+        const s = dustSeeds[i];
+        dAttr.setXYZ(
+          i,
+          s.x + Math.sin(t * s.speed + i) * 0.06,
+          s.y + Math.cos(t * s.speed * 0.8 + i) * 0.05,
+          s.z
+        );
+      }
+      dAttr.needsUpdate = true;
+
+      // Gentle breathing wave on the floor particle sea
+      const floorPosAttr = floorParticleGeo.getAttribute("position") as THREE.BufferAttribute;
+      for (let i = 0; i < floorParticleCount; i++) {
+        const r = floorParticleBase[i * 2];
+        const a = floorParticleBase[i * 2 + 1];
+        const wave = Math.sin(r * 2.8 - t * 1.15 + a * 2.0) * 0.014;
+        floorPosAttr.setY(i, wave);
+      }
+      floorPosAttr.needsUpdate = true;
 
       // Update dual-layer anatomical sub-structures + physiological organ pulses
       const hrHz = (snapshot.vitals?.heartRateBpm ?? 68) / 60.0;
@@ -1000,16 +1444,16 @@ export function BioTwin3DStage({
 
           const dimNonVascular = effectiveMode === "vascular" && !isVascularTissue;
           const baseEmissive = dimNonVascular
-            ? 0.05
+            ? 0.04
             : isSelected
               ? isShell
-                ? 0.34
-                : 0.68
+                ? 0.42
+                : 0.85
               : assessment.status === "green"
                 ? isShell
-                  ? 0.18
-                  : 0.34
-                : 0.48;
+                  ? 0.12
+                  : 0.22
+                : 0.42;
           entry.material.emissiveIntensity = dimNonVascular
             ? baseEmissive
             : baseEmissive +
@@ -1078,14 +1522,32 @@ export function BioTwin3DStage({
         cAttr.needsUpdate = true;
       }
 
-      // Animate 3D Domino Cascade Pulse Spheres along spline tubes
+      // Animate 3D Domino Cascade Pulse Spheres & Flow Shader along spline tubes
+      const hrSpeedMult = Math.max(0.7, (snapshot.vitals?.heartRateBpm ?? 68) / 68);
       for (const anim of activeCascadeAnimators) {
-        const u = (t * 0.55 + anim.speedOffset) % 1.0;
+        anim.tubeMat.uniforms.uTime.value = t;
+        anim.tubeMat.uniforms.uSpeed.value = 0.85 * hrSpeedMult;
+        const u = (t * 0.55 * hrSpeedMult + anim.speedOffset) % 1.0;
         const pos = anim.curve.getPointAt(u);
         anim.pulseMesh.position.copy(pos);
       }
 
-      renderer.render(scene, camera);
+      // Apply damped cursor parallax offset temporarily for render + 2D pill projection
+      if (enableParallaxRef.current) {
+        parallaxCurrent.lerp(parallaxTarget, 1 - Math.exp(-4.5 * dt));
+      } else {
+        parallaxCurrent.lerp(new THREE.Vector2(0, 0), 1 - Math.exp(-6.0 * dt));
+      }
+      camRight
+        .setFromMatrixColumn(camera.matrixWorld, 0)
+        .multiplyScalar(parallaxCurrent.x * 0.065);
+      camUp
+        .setFromMatrixColumn(camera.matrixWorld, 1)
+        .multiplyScalar(parallaxCurrent.y * 0.04);
+      camera.position.add(camRight).add(camUp);
+      camera.updateMatrixWorld();
+
+      composer.render();
 
       // Project 3D organ anchors to 2D callout pill positions via refs (zero React re-renders)
       const cw = container.clientWidth;
@@ -1113,6 +1575,9 @@ export function BioTwin3DStage({
         pillEl.style.opacity = "1";
         pillEl.style.transform = `translate3d(${clampedX.toFixed(1)}px, ${clampedY.toFixed(1)}px, 0)`;
       }
+
+      // Restore camera position so OrbitControls never drifts
+      camera.position.sub(camRight).sub(camUp);
     };
 
     animate();
@@ -1122,7 +1587,9 @@ export function BioTwin3DStage({
       cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
       controls.removeEventListener("start", cancelFlyOnUserDrag);
+      controlsRef.current = null;
       controls.dispose();
+      window.removeEventListener("pointermove", handleWindowPointerMove);
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);
       renderer.domElement.removeEventListener("pointerleave", handlePointerLeave);
@@ -1137,6 +1604,9 @@ export function BioTwin3DStage({
           }
         }
       });
+      composer.dispose();
+      bloomPass.dispose();
+      softDotTex?.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement);
@@ -1186,7 +1656,7 @@ export function BioTwin3DStage({
       )}
 
       {/* Surgical Sub-Structure Raycast HUD */}
-      {loadState === "ready" && (
+      {loadState === "ready" && !hideBottomHud && (
         <div
           data-testid="surgical-hud-readout"
           className="pointer-events-none absolute right-3 bottom-3 left-3 z-20 max-w-[360px] rounded-xl border border-white/10 bg-[#0d0e11]/90 px-3 py-2 shadow-xl backdrop-blur-md"
@@ -1235,8 +1705,8 @@ export function BioTwin3DStage({
               style={{ opacity: 0 }}
               className={`absolute top-0 left-0 z-10 inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2.5 font-mono text-[9.5px] font-semibold backdrop-blur-md transition-colors ${
                 isSelected
-                  ? "border-white bg-white text-[#0a0a0a] shadow-lg"
-                  : "border-white/15 bg-[#141414]/85 text-white hover:border-white/35"
+                  ? "border-sky-400/55 bg-[#0a0e16]/80 text-white shadow-[0_0_14px_rgba(56,189,248,0.24)]"
+                  : "border-white/14 bg-[#0a0e16]/60 text-white/80 hover:border-white/30 hover:text-white"
               }`}
             >
               <span
@@ -1244,7 +1714,7 @@ export function BioTwin3DStage({
                 style={{ backgroundColor: dotColor }}
               />
               <span>{shortTitle}</span>
-              <span className={isSelected ? "text-[#0a0a0a]/75" : "text-[#7e828a]"}>
+              <span className={isSelected ? "text-sky-300" : "text-white/45"}>
                 {assessment.score}
               </span>
             </button>

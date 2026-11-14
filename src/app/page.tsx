@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  ArrowLeft,
   ArrowUpRight,
   CheckCircle2,
   ExternalLink,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 import { AutonomousCmoPanel } from "@/components/AutonomousCmoPanel";
 import { BioTwinBodyMap } from "@/components/BioTwinBodyMap";
+import { PresentationView } from "@/components/PresentationView";
 import { RoutineGamificationBar } from "@/components/RoutineGamificationBar";
 import { TelemetryCharts } from "@/components/TelemetryCharts";
 import { VitalsInputPanel } from "@/components/VitalsInputPanel";
@@ -25,6 +27,7 @@ import {
   MISSION_ENVIRONMENTS,
   NASA_HAZARDS,
 } from "@/data/nasaHrpData";
+import { PRESENTATION_SLIDES } from "@/data/presentationSlides";
 import {
   applySpaceWeatherToTelemetry,
   fetchSpaceWeatherAlert,
@@ -143,6 +146,10 @@ export default function HomePage() {
     null
   );
   const [isSyncingWeather, setIsSyncingWeather] = useState<boolean>(false);
+  const [surfaceMode, setSurfaceMode] = useState<"presentation" | "console">(
+    "presentation"
+  );
+  const [slideIndex, setSlideIndex] = useState<number>(0);
 
   useEffect(() => {
     setRoutineProgress(loadRoutineProgress());
@@ -225,6 +232,38 @@ export default function HomePage() {
     setRoutineProgress(reset);
   }
 
+  function handleSelectSlide(nextIndex: number) {
+    const slide = PRESENTATION_SLIDES[nextIndex];
+    if (!slide) return;
+    setSlideIndex(nextIndex);
+    const scenario = DEMO_SCENARIOS.find((s) => s.id === slide.scenarioId);
+    if (scenario) {
+      setActiveScenarioId(scenario.id);
+      setEnvId(scenario.environmentId);
+      setVitals(scenario.vitals);
+      setEnvTelemetry(scenario.envTelemetry);
+    }
+    setSelectedSystem(slide.focusSystem);
+  }
+
+  if (surfaceMode === "presentation") {
+    return (
+      <PresentationView
+        slideIndex={slideIndex}
+        onSelectSlide={handleSelectSlide}
+        onOpenConsole={() => setSurfaceMode("console")}
+        evaluation={evaluation}
+        vitals={vitals}
+        envTelemetry={envTelemetry}
+        selectedSystem={selectedSystem}
+        onSelectSystem={setSelectedSystem}
+        isSyncingWeather={isSyncingWeather}
+        onSyncSpaceWeather={handleSyncSpaceWeather}
+        spaceWeather={spaceWeather}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white">
       {/* Fixed Minimal Top Navbar (x.ai/bot style) */}
@@ -289,8 +328,17 @@ export default function HomePage() {
             })}
           </nav>
 
-          {/* Right Action Pills: DONKI Sync & Crew Readiness */}
+          {/* Right Action Pills: Presentation Mode, DONKI Sync & Crew Readiness */}
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSurfaceMode("presentation")}
+              className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-full border border-white/10 bg-[#1a1a1a] px-3.5 text-xs font-medium text-white transition hover:border-white/25 hover:bg-[#222222]"
+            >
+              <ArrowLeft className="h-3.5 w-3.5 text-[#7e828a]" aria-hidden="true" />
+              <span className="hidden sm:inline">Presentation</span>
+            </button>
+
             <button
               type="button"
               onClick={handleSyncSpaceWeather}
