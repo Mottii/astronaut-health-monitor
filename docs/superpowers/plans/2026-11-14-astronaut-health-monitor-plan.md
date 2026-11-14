@@ -150,15 +150,15 @@
   - `VitalsInputPanel({ vitals, envTelemetry, envId, onUpdateVitals, onUpdateEnvTelemetry })`
   - `TelemetryCharts({ history, currentVitals, currentEnvTelemetry, envId })`
 
-- [ ] **Step 1: Build `src/components/BioTwinBodyMap.tsx`**
+- [x] **Step 1: Build `src/components/BioTwinBodyMap.tsx`**
   Create an interactive NASA Open MCT-styled SVG human figure displaying all 6 anatomical nodes (`neuro_ocular`, `cardiovascular`, `musculoskeletal_renal`, `metabolic_endocrine`, `immune_hematology`, `behavioral_circadian`) with status colors (`green` emerald, `amber` gold, `red` crimson + pulse ring), clickable hit areas (`aria-pressed`, keyboard focusable), animated SVG `<path>` cascade lines connecting triggered organs, and an active cascade callout strip underneath.
-- [ ] **Step 2: Build `src/components/VitalsInputPanel.tsx`**
+- [x] **Step 2: Build `src/components/VitalsInputPanel.tsx`**
   Create clean dark-telemetry controls for all 7 challenge prompt indicators (`bloodPressureSystolic`/`Diastolic`, `heartRateBpm`, `bloodGlucoseMgDl`, `bodyTempC`, `sleepHours`, `moodScore`, `hydrationMl`), plus `ocularFinding` selector (for SANS / ultrasound eye check) and `cabinCo2MmHg` / `dailyRadiationMsv` habitat controls. Show an explicit **Earth Normal vs. Spaceflight Normal** badge next to each indicator.
-- [ ] **Step 3: Build `src/components/TelemetryCharts.tsx`**
+- [x] **Step 3: Build `src/components/TelemetryCharts.tsx`**
   Use `recharts` (`ResponsiveContainer`, `ComposedChart`, `Line`, `Area`, `ReferenceArea`, `XAxis`, `YAxis`, `Tooltip`) with tab switching between: (a) **Physiological Vitals (HR, Glucose, Sleep)** overlaid with Spaceflight vs. Earth normal zones, and (b) **NASA OSDR EDA & RadLab Habitat Telemetry (Cabin $\text{CO}_2$ ISS vs. Ground Control + GCR/SAA Daily Radiation)**.
-- [ ] **Step 4: Verify TypeScript compilation**
+- [x] **Step 4: Verify TypeScript compilation**
   Run: `npx tsc --noEmit` -> Expected: exits 0.
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   ```bash
   git add src/components/BioTwinBodyMap.tsx src/components/VitalsInputPanel.tsx src/components/TelemetryCharts.tsx
   git commit -m "feat: add BioTwin SVG body map, vitals input panel, and Recharts telemetry views"
