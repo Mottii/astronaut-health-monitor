@@ -57,9 +57,9 @@ function BaselineSlider({
   onChange,
 }: BaselineSliderProps) {
   return (
-    <div className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-2.5">
+    <div className="rounded-2xl border border-white/[0.06] bg-[#141414] p-3.5">
       <div className="flex items-center justify-between gap-2">
-        <label className="text-xs font-medium text-slate-200">{label}</label>
+        <label className="text-xs font-medium text-white">{label}</label>
         <div className="flex items-center gap-1.5">
           <input
             type="number"
@@ -72,9 +72,9 @@ function BaselineSlider({
               const parsed = Number(e.target.value);
               if (!Number.isNaN(parsed)) onChange(parsed);
             }}
-            className="w-16 rounded border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-right text-xs font-semibold text-cyan-300 focus:border-cyan-400 focus:outline-none"
+            className="w-16 rounded-lg border border-white/10 bg-[#202020] px-2 py-0.5 text-right font-mono text-xs font-medium tabular-nums text-white transition focus:border-white/35 focus:outline-none"
           />
-          <span className="text-[11px] text-slate-400">{unit}</span>
+          <span className="font-mono text-[11px] text-[#7e828a]">{unit}</span>
         </div>
       </div>
 
@@ -86,18 +86,18 @@ function BaselineSlider({
         value={value}
         aria-label={`${label} slider`}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="mt-2 h-1.5 w-full cursor-pointer accent-cyan-400"
+        className="mt-3 w-full"
       />
 
       {baseline && (
         <div
-          className="mt-1.5 flex flex-wrap items-center justify-between gap-1 text-[10px]"
+          className="mt-2.5 flex flex-wrap items-center justify-between gap-1.5 text-[10px]"
           title={baseline.rationale}
         >
-          <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-400">
+          <span className="rounded-full bg-[#1b1b1b] px-2 py-0.5 font-mono text-[#7e828a]">
             Earth: {baseline.earthNormal}
           </span>
-          <span className="rounded bg-cyan-950/70 px-1.5 py-0.5 text-cyan-300">
+          <span className="rounded-full border border-white/[0.08] bg-[#202020] px-2 py-0.5 font-mono text-white/90">
             Space: {baseline.spaceflightAdjusted}
           </span>
         </div>
@@ -199,27 +199,30 @@ export function VitalsInputPanel({
   return (
     <section
       aria-label="Crew Vitals and Habitat Sensor Inputs"
-      className="rounded-xl border border-slate-800 bg-slate-900/80 p-4 shadow-lg"
+      className="flex flex-col gap-5 rounded-3xl border border-white/[0.08] bg-[#1a1a1a] p-6 sm:p-8"
     >
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Activity className="h-4 w-4 text-cyan-400" />
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-widest text-cyan-400">
-              Crew &amp; Habitat Telemetry Input
-            </p>
-            <h2 className="text-sm font-semibold text-slate-100">
-              Spaceflight Baseline vs. Earth Normal ({env.gravityLabel})
-            </h2>
-          </div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.12em] text-[#7e828a]">
+            <Activity className="h-3.5 w-3.5 text-white" aria-hidden="true" />
+            Crew &amp; Habitat Telemetry Input
+          </p>
+          <h2 className="mt-1 text-xl font-medium tracking-tight text-white">
+            Spaceflight Baseline vs. Earth Normal
+          </h2>
+          <p className="mt-1 text-xs text-[#7e828a]">
+            Calibrated for {env.gravityLabel} · Comm Delay{" "}
+            {env.commDelayLabel}
+          </p>
         </div>
-        <span className="rounded-full border border-slate-700 bg-slate-950 px-2.5 py-1 text-[11px] text-slate-300">
-          Comm Delay: {env.commDelayLabel}
+
+        <span className="rounded-full border border-white/10 bg-[#141414] px-3 py-1 font-mono text-[11px] text-[#7e828a]">
+          {env.gravityLabel}
         </span>
       </div>
 
       {/* Physiological Vitals Grid */}
-      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {vitalFields.map((field) => {
           const baselineKey =
             field.key === "bloodPressureDiastolic"
@@ -248,13 +251,13 @@ export function VitalsInputPanel({
       </div>
 
       {/* Ocular Self-Exam & ARED Countermeasure Row */}
-      <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-        <div className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-2.5">
-          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-slate-200">
-            <Eye className="h-3.5 w-3.5 text-cyan-400" />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="rounded-2xl border border-white/[0.06] bg-[#141414] p-3.5">
+          <div className="mb-2.5 flex items-center gap-1.5 text-xs font-medium text-white">
+            <Eye className="h-3.5 w-3.5 text-[#7e828a]" aria-hidden="true" />
             <span>Ocular / Ultrasound Self-Check</span>
           </div>
-          <div className="grid grid-cols-3 gap-1">
+          <div className="flex flex-wrap gap-1.5">
             {OCULAR_OPTIONS.map((opt) => {
               const active = vitals.ocularFinding === opt.value;
               return (
@@ -262,14 +265,21 @@ export function VitalsInputPanel({
                   key={opt.value}
                   type="button"
                   onClick={() => onUpdateVitals({ ocularFinding: opt.value })}
-                  className={`rounded border px-2 py-1.5 text-[11px] font-medium transition ${
+                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-medium transition active:scale-[0.98] ${
                     active
-                      ? opt.value === "clear"
-                        ? "border-emerald-400 bg-emerald-950/60 text-emerald-200"
-                        : "border-rose-400 bg-rose-950/60 text-rose-200"
-                      : "border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-600"
+                      ? "bg-white text-[#0a0a0a]"
+                      : "border border-white/10 bg-[#202020] text-[#7e828a] hover:border-white/25 hover:text-white"
                   }`}
                 >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      opt.value === "clear"
+                        ? "bg-emerald-400"
+                        : opt.value === "blurry_near"
+                        ? "bg-amber-400"
+                        : "bg-rose-400"
+                    }`}
+                  />
                   {opt.label}
                 </button>
               );
@@ -277,11 +287,11 @@ export function VitalsInputPanel({
           </div>
         </div>
 
-        <div className="flex flex-col justify-between rounded-lg border border-slate-800/80 bg-slate-950/60 p-2.5">
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1.5 text-xs font-medium text-slate-200">
-              <Flame className="h-3.5 w-3.5 text-amber-400" />
-              ARED Resistive Bone Loading
+        <div className="flex flex-col justify-between rounded-2xl border border-white/[0.06] bg-[#141414] p-3.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex items-center gap-1.5 text-xs font-medium text-white">
+              <Flame className="h-3.5 w-3.5 text-[#7e828a]" aria-hidden="true" />
+              ARED Bone Loading
             </span>
             <button
               type="button"
@@ -292,28 +302,36 @@ export function VitalsInputPanel({
                   aredExerciseCompleted: !vitals.aredExerciseCompleted,
                 })
               }
-              className={`rounded-full border px-3 py-1 text-[11px] font-semibold transition ${
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-medium transition active:scale-[0.98] ${
                 vitals.aredExerciseCompleted
-                  ? "border-emerald-400 bg-emerald-950/60 text-emerald-300"
-                  : "border-amber-500/50 bg-amber-950/50 text-amber-300"
+                  ? "bg-white text-[#0a0a0a]"
+                  : "border border-amber-500/25 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
               }`}
             >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  vitals.aredExerciseCompleted
+                    ? "bg-emerald-500"
+                    : "bg-amber-400"
+                }`}
+              />
               {vitals.aredExerciseCompleted ? "Logged Today" : "Pending"}
             </button>
           </div>
-          <p className="mt-1.5 text-[10px] text-slate-400">
-            Daily axial load required in {env.gravityLabel} to suppress Ca2+ bone loss.
+          <p className="mt-2 text-[11px] text-[#7e828a]">
+            Daily axial load required in {env.gravityLabel} to suppress Ca2+
+            bone loss.
           </p>
         </div>
       </div>
 
       {/* Habitat & Radiation Override Controls (OSDR EDA + RadLab) */}
-      <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/80 p-3">
-        <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
-          <ShieldAlert className="h-3.5 w-3.5 text-amber-400" />
+      <div className="rounded-2xl border border-white/[0.06] bg-[#141414] p-4">
+        <div className="mb-3 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.12em] text-[#7e828a]">
+          <ShieldAlert className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
           <span>Habitat Sensors (NASA OSDR EDA &amp; RadLab)</span>
         </div>
-        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <BaselineSlider
             label="Cabin CO2 (EDA)"
             unit="mmHg"

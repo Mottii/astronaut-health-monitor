@@ -58,10 +58,18 @@ export function build14SolSeries(
 }
 
 const CHART_TABS: Array<{ id: ChartTabId; label: string }> = [
-  { id: "vitals", label: "Crew Vitals (14-Sol)" },
-  { id: "eda_co2", label: "OSDR EDA: Cabin CO2" },
-  { id: "radlab", label: "OSDR RadLab: Radiation" },
+  { id: "vitals", label: "Crew Vitals" },
+  { id: "eda_co2", label: "OSDR EDA · CO2" },
+  { id: "radlab", label: "RadLab · Dose" },
 ];
+
+const TOOLTIP_STYLE = {
+  backgroundColor: "#141414",
+  borderColor: "rgba(255, 255, 255, 0.14)",
+  borderRadius: "12px",
+  fontSize: "12px",
+  color: "#ffffff",
+};
 
 export function TelemetryCharts({
   history,
@@ -76,22 +84,30 @@ export function TelemetryCharts({
   return (
     <section
       aria-label="14-Sol Telemetry Trends"
-      className="rounded-xl border border-slate-800 bg-slate-900/80 p-4 shadow-lg"
+      className="flex flex-col gap-5 rounded-3xl border border-white/[0.08] bg-[#1a1a1a] p-6 sm:p-8"
     >
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <LineChartIcon className="h-4 w-4 text-cyan-400" />
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-widest text-cyan-400">
+            <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.12em] text-[#7e828a]">
+              <LineChartIcon
+                className="h-3.5 w-3.5 text-white"
+                aria-hidden="true"
+              />
               Dynamic Telemetry Trends
             </p>
-            <h2 className="text-sm font-semibold text-slate-100">
-              {env.name} — 14-Sol History + Live Sol 14
+            <h2 className="mt-1 text-xl font-medium tracking-tight text-white">
+              {env.name} — 14-Sol History
             </h2>
+            <p className="mt-1 text-xs text-[#7e828a]">
+              Live Sol 14 point updates instantaneously as vitals or habitat
+              sensors change.
+            </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-1 rounded-lg border border-slate-800 bg-slate-950 p-1">
+        {/* Segmented Pill Switcher */}
+        <div className="inline-flex w-fit flex-wrap gap-1 rounded-full border border-white/[0.08] bg-[#141414] p-1">
           {CHART_TABS.map((tab) => {
             const active = activeTab === tab.id;
             return (
@@ -99,10 +115,10 @@ export function TelemetryCharts({
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+                className={`rounded-full px-3.5 py-1.5 text-xs font-medium transition ${
                   active
-                    ? "bg-cyan-500/20 text-cyan-300"
-                    : "text-slate-400 hover:text-slate-200"
+                    ? "bg-white text-[#0a0a0a]"
+                    : "text-[#7e828a] hover:text-white"
                 }`}
               >
                 {tab.label}
@@ -112,41 +128,38 @@ export function TelemetryCharts({
         </div>
       </div>
 
-      <div className="h-64 w-full min-w-0 rounded-lg border border-slate-800/80 bg-slate-950/90 p-2">
+      {/* Chart Surface */}
+      <div className="h-[380px] w-full min-w-0 flex-1 rounded-2xl border border-white/[0.06] bg-[#141414] p-4 lg:min-h-[440px]">
         <ResponsiveContainer width="100%" height="100%">
           {activeTab === "vitals" ? (
             <ComposedChart
               data={series}
-              margin={{ top: 10, right: 12, left: -12, bottom: 0 }}
+              margin={{ top: 12, right: 12, left: -12, bottom: 0 }}
             >
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <CartesianGrid
+                strokeDasharray="3 3"
+                stroke="rgba(255,255,255,0.06)"
+              />
               <XAxis
                 dataKey="sol"
-                tick={{ fill: "#94a3b8", fontSize: 10 }}
-                stroke="#334155"
+                tick={{ fill: "#7e828a", fontSize: 10 }}
+                stroke="rgba(255,255,255,0.12)"
               />
               <YAxis
-                tick={{ fill: "#94a3b8", fontSize: 10 }}
-                stroke="#334155"
+                tick={{ fill: "#7e828a", fontSize: 10 }}
+                stroke="rgba(255,255,255,0.12)"
                 domain={[40, 170]}
               />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "#0f172a",
-                  borderColor: "#334155",
-                  fontSize: "12px",
-                  color: "#f1f5f9",
-                }}
-              />
-              <Legend wrapperStyle={{ fontSize: "11px" }} />
+              <Tooltip contentStyle={TOOLTIP_STYLE} />
+              <Legend wrapperStyle={{ fontSize: "11px", color: "#7e828a" }} />
               <ReferenceArea
                 y1={75}
                 y2={110}
-                fill="#06b6d4"
-                fillOpacity={0.08}
+                fill="#ffffff"
+                fillOpacity={0.04}
                 label={{
                   value: "Space Glucose Target (75–110)",
-                  fill: "#22d3ee",
+                  fill: "#7e828a",
                   fontSize: 9,
                   position: "insideTopLeft",
                 }}
@@ -155,7 +168,7 @@ export function TelemetryCharts({
                 type="monotone"
                 dataKey="systolicBp"
                 name="Systolic BP (mmHg)"
-                stroke="#f59e0b"
+                stroke="#fbbf24"
                 strokeWidth={2}
                 dot={{ r: 2.5 }}
               />
@@ -163,7 +176,7 @@ export function TelemetryCharts({
                 type="monotone"
                 dataKey="bloodGlucoseMgDl"
                 name="Glucose (mg/dL)"
-                stroke="#22d3ee"
+                stroke="#ffffff"
                 strokeWidth={2}
                 dot={{ r: 2.5 }}
               />
@@ -179,31 +192,27 @@ export function TelemetryCharts({
           ) : activeTab === "eda_co2" ? (
             <ComposedChart
               data={series}
-              margin={{ top: 10, right: 12, left: -12, bottom: 0 }}
+              margin={{ top: 12, right: 12, left: -12, bottom: 0 }}
             >
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <CartesianGrid
+                strokeDasharray="3 3"
+                stroke="rgba(255,255,255,0.06)"
+              />
               <XAxis
                 dataKey="sol"
-                tick={{ fill: "#94a3b8", fontSize: 10 }}
-                stroke="#334155"
+                tick={{ fill: "#7e828a", fontSize: 10 }}
+                stroke="rgba(255,255,255,0.12)"
               />
               <YAxis
-                tick={{ fill: "#94a3b8", fontSize: 10 }}
-                stroke="#334155"
+                tick={{ fill: "#7e828a", fontSize: 10 }}
+                stroke="rgba(255,255,255,0.12)"
                 domain={[0, 6]}
               />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "#0f172a",
-                  borderColor: "#334155",
-                  fontSize: "12px",
-                  color: "#f1f5f9",
-                }}
-              />
-              <Legend wrapperStyle={{ fontSize: "11px" }} />
+              <Tooltip contentStyle={TOOLTIP_STYLE} />
+              <Legend wrapperStyle={{ fontSize: "11px", color: "#7e828a" }} />
               <ReferenceLine
                 y={3.5}
-                stroke="#ef4444"
+                stroke="#f87171"
                 strokeDasharray="4 4"
                 label={{
                   value: "SANS Hypercapnia Threshold (3.5 mmHg)",
@@ -216,8 +225,8 @@ export function TelemetryCharts({
                 type="monotone"
                 dataKey="issCabinCo2MmHg"
                 name="Habitat Cabin CO2 (mmHg)"
-                fill="#f59e0b"
-                fillOpacity={0.22}
+                fill="#fbbf24"
+                fillOpacity={0.14}
                 stroke="#fbbf24"
                 strokeWidth={2}
               />
@@ -233,31 +242,27 @@ export function TelemetryCharts({
           ) : (
             <ComposedChart
               data={series}
-              margin={{ top: 10, right: 12, left: -12, bottom: 0 }}
+              margin={{ top: 12, right: 12, left: -12, bottom: 0 }}
             >
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <CartesianGrid
+                strokeDasharray="3 3"
+                stroke="rgba(255,255,255,0.06)"
+              />
               <XAxis
                 dataKey="sol"
-                tick={{ fill: "#94a3b8", fontSize: 10 }}
-                stroke="#334155"
+                tick={{ fill: "#7e828a", fontSize: 10 }}
+                stroke="rgba(255,255,255,0.12)"
               />
               <YAxis
-                tick={{ fill: "#94a3b8", fontSize: 10 }}
-                stroke="#334155"
+                tick={{ fill: "#7e828a", fontSize: 10 }}
+                stroke="rgba(255,255,255,0.12)"
                 domain={[0, "auto"]}
               />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "#0f172a",
-                  borderColor: "#334155",
-                  fontSize: "12px",
-                  color: "#f1f5f9",
-                }}
-              />
-              <Legend wrapperStyle={{ fontSize: "11px" }} />
+              <Tooltip contentStyle={TOOLTIP_STYLE} />
+              <Legend wrapperStyle={{ fontSize: "11px", color: "#7e828a" }} />
               <ReferenceLine
                 y={2.0}
-                stroke="#ef4444"
+                stroke="#f87171"
                 strokeDasharray="4 4"
                 label={{
                   value: "Storm Shelter Action (2.0 mSv/day)",
@@ -271,17 +276,17 @@ export function TelemetryCharts({
                 dataKey="gcrDoseMsv"
                 name="GCR Baseline (mSv)"
                 stackId="rad"
-                fill="#06b6d4"
-                fillOpacity={0.25}
-                stroke="#22d3ee"
+                fill="#ffffff"
+                fillOpacity={0.12}
+                stroke="#ffffff"
               />
               <Area
                 type="monotone"
                 dataKey="saaDoseMsv"
                 name="SAA / SPE Burst (mSv)"
                 stackId="rad"
-                fill="#f43f5e"
-                fillOpacity={0.3}
+                fill="#f87171"
+                fillOpacity={0.24}
                 stroke="#fb7185"
               />
               <Line
@@ -297,14 +302,15 @@ export function TelemetryCharts({
         </ResponsiveContainer>
       </div>
 
-      <p className="mt-2 text-[11px] text-slate-400">
+      {/* Caption Note */}
+      <div className="rounded-2xl border border-white/[0.06] bg-[#141414] px-4 py-3 text-xs leading-relaxed text-[#7e828a]">
         {activeTab === "vitals" &&
-          "Shaded cyan zone shows spaceflight-adjusted fasting blood glucose (75–110 mg/dL, NASA OSDR OSD-104)."}
+          "Shaded neutral band indicates spaceflight-adjusted fasting blood glucose (75–110 mg/dL, NASA OSDR OSD-104)."}
         {activeTab === "eda_co2" &&
           "Compares closed-habitat cabin pCO2 against Earth ground control (~0.35 mmHg) per NASA OSDR Environmental Data Application (EDA)."}
         {activeTab === "radlab" &&
           "Splits absorbed dose into Galactic Cosmic Rays (GCR) and South Atlantic Anomaly / Solar Particle Events (SAA/SPE) per NASA OSDR RadLab & CSA dosimetry."}
-      </p>
+      </div>
     </section>
   );
 }

@@ -4,13 +4,12 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  ArrowUpRight,
   CheckCircle2,
   ExternalLink,
-  Orbit,
   Radio,
   RefreshCw,
   Shield,
-  Sparkles,
   Sun,
 } from "lucide-react";
 import { AutonomousCmoPanel } from "@/components/AutonomousCmoPanel";
@@ -20,6 +19,7 @@ import { TelemetryCharts } from "@/components/TelemetryCharts";
 import { VitalsInputPanel } from "@/components/VitalsInputPanel";
 import {
   BASE_14_SOL_HISTORY,
+  BODY_SYSTEM_METADATA,
   DEFAULT_ROUTINE_TASKS,
   DEMO_SCENARIOS,
   MISSION_ENVIRONMENTS,
@@ -56,24 +56,40 @@ const ENVIRONMENT_ORDER: MissionEnvironmentId[] = [
   "mars_base",
 ];
 
-const READINESS_BADGE: Record<
+const ENV_SHORT_LABEL: Record<MissionEnvironmentId, string> = {
+  iss_orbit: "ISS Orbit",
+  lunar_rover: "Lunar Rover",
+  mars_transit: "Mars Transit",
+  mars_base: "Mars Base",
+};
+
+const SYSTEM_ACCENT_HEX: Record<BodySystemId, string> = {
+  neuro_ocular: "#2dd4bf",
+  behavioral_circadian: "#818cf8",
+  cardiovascular: "#fb7185",
+  immune_hematology: "#c084fc",
+  metabolic_endocrine: "#f97316",
+  musculoskeletal_renal: "#4ade80",
+};
+
+const READINESS_STATUS: Record<
   TriageStatus,
-  { label: string; badgeClass: string; scoreClass: string }
+  { label: string; dotClass: string; badgeClass: string }
 > = {
   green: {
     label: "NOMINAL",
-    badgeClass: "border-emerald-500/45 bg-emerald-500/15 text-emerald-300",
-    scoreClass: "text-emerald-300",
+    dotClass: "bg-emerald-500",
+    badgeClass: "bg-white text-[#0a0a0a]",
   },
   amber: {
     label: "ELEVATED",
-    badgeClass: "border-amber-500/45 bg-amber-500/15 text-amber-300",
-    scoreClass: "text-amber-300",
+    dotClass: "bg-amber-500",
+    badgeClass: "bg-amber-400 text-[#0a0a0a]",
   },
   red: {
     label: "CRITICAL",
-    badgeClass: "border-rose-500/45 bg-rose-500/15 text-rose-300",
-    scoreClass: "text-rose-300",
+    dotClass: "bg-white",
+    badgeClass: "bg-rose-500 text-white",
   },
 };
 
@@ -138,7 +154,9 @@ export default function HomePage() {
   );
 
   const envConfig = MISSION_ENVIRONMENTS[envId];
-  const readinessStyle = READINESS_BADGE[evaluation.overallStatus];
+  const readinessStyle = READINESS_STATUS[evaluation.overallStatus];
+  const selectedMeta = BODY_SYSTEM_METADATA[selectedSystem];
+  const activeScenario = DEMO_SCENARIOS.find((s) => s.id === activeScenarioId);
 
   function handleSelectEnvironment(nextEnvId: MissionEnvironmentId) {
     setEnvId(nextEnvId);
@@ -208,169 +226,282 @@ export default function HomePage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="mx-auto flex max-w-[1600px] flex-col gap-5 px-4 py-5 sm:px-6">
-        {/* Top Mission Telemetry Command Bar */}
-        <header className="rounded-xl border border-slate-800 bg-slate-900/90 p-4 shadow-xl">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-            {/* Branding & Active Mission Context */}
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/40 bg-cyan-500/15 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-widest text-cyan-300">
-                  <Orbit className="h-3.5 w-3.5" aria-hidden="true" />
-                  ARES-MED OS
-                </span>
-                <span className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
-                  NASA Space Apps 2026 · BioTwin &amp; Autonomous CMO Console
-                </span>
-              </div>
-              <h1 className="mt-1.5 text-xl font-bold tracking-tight text-slate-100 sm:text-2xl">
-                {envConfig.name}
-              </h1>
-              <p className="text-xs text-slate-400">{envConfig.subtitle}</p>
-            </div>
+    <div className="min-h-screen bg-[#0a0a0a] text-white">
+      {/* Fixed Minimal Top Navbar (x.ai/bot style) */}
+      <header className="fixed inset-x-0 top-0 z-50 border-b border-white/[0.07] bg-[#0a0a0a]/85 backdrop-blur-md">
+        <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-6">
+          {/* Left Geometric ARES Mark */}
+          <a
+            href="#top"
+            className="flex shrink-0 items-center gap-2.5 text-sm font-semibold tracking-tight text-white"
+          >
+            <svg
+              viewBox="0 0 32 32"
+              className="h-6 w-6 text-white"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M4 26L14.5 6H18.5L28 26H23.2L16.5 11.4L9.2 26H4Z"
+                fill="currentColor"
+              />
+              <path
+                d="M5 20.5C11.5 14 20.5 11 29 9.5"
+                stroke="#0a0a0a"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+              />
+            </svg>
+            <span>ARES-MED</span>
+          </a>
 
-            {/* Readiness Score Gauge & Live NASA DONKI Sync */}
-            <div className="flex flex-wrap items-center gap-3">
-              {/* NASA DONKI Space Weather Sync */}
-              <div className="flex flex-col items-start gap-1 rounded-lg border border-slate-800 bg-slate-950/80 px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleSyncSpaceWeather}
-                    disabled={isSyncingWeather}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-cyan-500/50 bg-cyan-500/15 px-2.5 py-1 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-500/25 disabled:opacity-60"
-                  >
-                    <RefreshCw
-                      className={`h-3.5 w-3.5 ${
-                        isSyncingWeather ? "animate-spin" : ""
+          {/* Center Environment Pill Tabs (Desktop) */}
+          <nav
+            aria-label="Mission Environment Profile"
+            className="hidden items-center gap-1 rounded-full border border-white/[0.08] bg-[#141414] p-1 lg:flex"
+          >
+            {ENVIRONMENT_ORDER.map((id) => {
+              const env = MISSION_ENVIRONMENTS[id];
+              const active = envId === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => handleSelectEnvironment(id)}
+                  aria-pressed={active}
+                  className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium transition ${
+                    active
+                      ? "bg-white text-[#0a0a0a]"
+                      : "text-[#7e828a] hover:text-white"
+                  }`}
+                >
+                  <span>{ENV_SHORT_LABEL[id]}</span>
+                  {env.autonomousModeRequired && (
+                    <Radio
+                      className={`h-3 w-3 ${
+                        active ? "text-amber-600" : "text-amber-400"
                       }`}
                       aria-hidden="true"
                     />
-                    {isSyncingWeather
-                      ? "Syncing NASA DONKI..."
-                      : "Sync Live NASA DONKI"}
-                  </button>
-
-                  {spaceWeather && (
-                    <span
-                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                        spaceWeather.isFallback
-                          ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
-                          : "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
-                      }`}
-                    >
-                      <Sun className="h-3 w-3" aria-hidden="true" />
-                      {spaceWeather.isFallback
-                        ? "OSDR RadLab Fallback"
-                        : "Live DONKI"}
-                    </span>
                   )}
-                </div>
+                </button>
+              );
+            })}
+          </nav>
 
-                <p className="max-w-xs text-[10px] text-slate-400">
-                  {spaceWeather
-                    ? spaceWeather.summary
-                    : "Pull live NASA DONKI solar flare telemetry (falls back to OSDR RadLab SPE benchmark offline)."}
-                </p>
-              </div>
+          {/* Right Action Pills: DONKI Sync & Crew Readiness */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleSyncSpaceWeather}
+              disabled={isSyncingWeather}
+              className="inline-flex h-9 items-center gap-1.5 rounded-full border border-white/10 bg-[#1a1a1a] px-3.5 text-xs font-medium text-white transition hover:border-white/25 hover:bg-[#222222] disabled:opacity-60"
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 text-[#7e828a] ${
+                  isSyncingWeather ? "animate-spin" : ""
+                }`}
+                aria-hidden="true"
+              />
+              <span className="hidden sm:inline">
+                {isSyncingWeather ? "Syncing DONKI..." : "Sync Live NASA DONKI"}
+              </span>
+              <span className="sm:hidden">DONKI</span>
+            </button>
 
-              {/* Overall Mission Readiness Gauge */}
-              <div className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/80 px-3.5 py-2">
-                <div>
-                  <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                    Crew Readiness
-                  </span>
-                  <div className="flex items-baseline gap-1 font-mono">
-                    <span
-                      className={`text-2xl font-bold ${readinessStyle.scoreClass}`}
-                    >
-                      {evaluation.readinessScore}
-                    </span>
-                    <span className="text-xs text-slate-500">/100</span>
-                  </div>
-                </div>
+            <a
+              href="#biotwin-console"
+              className={`inline-flex h-9 items-center gap-2 rounded-full px-3.5 text-xs font-medium transition hover:opacity-95 ${readinessStyle.badgeClass}`}
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${readinessStyle.dotClass}`}
+              />
+              <span>Readiness</span>
+              <span className="font-mono font-semibold tabular-nums">
+                {evaluation.readinessScore}/100
+              </span>
+            </a>
+          </div>
+        </div>
+      </header>
 
-                <div className="flex flex-col items-end gap-1">
-                  <span
-                    className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold tracking-wider ${readinessStyle.badgeClass}`}
-                  >
-                    {readinessStyle.label}
-                  </span>
-                  <span className="text-[10px] text-slate-400">
-                    {evaluation.activeCascades.length === 0 ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-300">
-                        <CheckCircle2
-                          className="h-3 w-3"
-                          aria-hidden="true"
-                        />
-                        0 Active Cascades
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-amber-300">
-                        <AlertTriangle
-                          className="h-3 w-3"
-                          aria-hidden="true"
-                        />
-                        {evaluation.activeCascades.length} Cascade
-                        {evaluation.activeCascades.length > 1 ? "s" : ""}
-                      </span>
-                    )}
-                  </span>
-                </div>
-              </div>
-            </div>
+      {/* Main Content Flow */}
+      <main id="top" className="pt-24 sm:pt-28">
+        {/* Hero Section */}
+        <section className="mx-auto max-w-[1360px] px-4 text-center sm:px-6">
+          {/* Launch Kicker Pill */}
+          <a
+            href="#citations"
+            className="group inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-[#1a1a1a]/70 py-1.5 pr-2 pl-3.5 text-xs font-medium transition hover:border-white/20 hover:bg-[#1a1a1a] sm:text-sm"
+          >
+            <span className="text-white">NASA Space Apps 2026</span>
+            <span className="hidden text-[#7e828a] sm:inline">
+              Autonomous Space Medicine Console
+            </span>
+            <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/10 text-white transition group-hover:bg-white group-hover:text-[#0a0a0a]">
+              <ArrowUpRight className="h-3 w-3" aria-hidden="true" />
+            </span>
+          </a>
+
+          {/* Editorial H1 with Inline Geometric BioTwin Mark */}
+          <h1 className="mx-auto mt-5 max-w-4xl text-4xl font-medium leading-[1.05] tracking-tight text-white text-balance sm:text-5xl lg:text-6xl">
+            Meet
+            <span
+              className="mx-2.5 inline-flex -translate-y-[0.06em] align-middle"
+              aria-hidden="true"
+            >
+              <svg
+                viewBox="0 0 92 92"
+                className="h-[0.92em] w-[0.92em]"
+                fill="none"
+              >
+                <rect width="92" height="92" rx="46" fill="#ffffff" />
+                <g transform="rotate(-10 46 46)">
+                  <rect
+                    x="30"
+                    y="30"
+                    width="11"
+                    height="24"
+                    rx="5.5"
+                    fill="#0a0a0a"
+                  />
+                  <rect
+                    x="51"
+                    y="30"
+                    width="11"
+                    height="24"
+                    rx="5.5"
+                    fill="#0a0a0a"
+                  />
+                </g>
+              </svg>
+            </span>
+            ARES-MED
+          </h1>
+
+          {/* Subtitle */}
+          <p className="mx-auto mt-5 max-w-2xl text-base leading-relaxed text-[#7e828a] text-balance sm:text-lg lg:text-xl">
+            Autonomous medical triage for deep-space crews. Live multi-organ
+            physiological cascades, Earth-vs-Space baselines, and guided CMO
+            protocols.
+          </p>
+
+          {/* Mobile/Tablet Environment Selector */}
+          <div className="mx-auto mt-6 flex flex-wrap items-center justify-center gap-1.5 lg:hidden">
+            {ENVIRONMENT_ORDER.map((id) => {
+              const active = envId === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => handleSelectEnvironment(id)}
+                  aria-pressed={active}
+                  className={`rounded-full px-3.5 py-1.5 text-xs font-medium transition ${
+                    active
+                      ? "bg-white text-[#0a0a0a]"
+                      : "border border-white/10 bg-[#1a1a1a] text-[#7e828a] hover:text-white"
+                  }`}
+                >
+                  {ENV_SHORT_LABEL[id]}
+                </button>
+              );
+            })}
           </div>
 
-          {/* Environment Switcher + Active NASA HRP 5 Hazards */}
-          <div className="mt-4 grid grid-cols-1 gap-3 border-t border-slate-800/80 pt-3 lg:grid-cols-12 lg:items-center">
-            <div className="lg:col-span-7">
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
-                Mission Environment &amp; Communication Delay Profile
-              </p>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {ENVIRONMENT_ORDER.map((id) => {
-                  const env = MISSION_ENVIRONMENTS[id];
-                  const active = envId === id;
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => handleSelectEnvironment(id)}
-                      aria-pressed={active}
-                      className={`rounded-lg border px-2.5 py-2 text-left transition ${
-                        active
-                          ? "border-cyan-400 bg-cyan-950/50 text-cyan-100 shadow-sm shadow-cyan-500/20"
-                          : "border-slate-800 bg-slate-950/70 text-slate-300 hover:border-slate-700"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="truncate text-xs font-semibold">
-                          {env.name}
-                        </span>
-                        {env.autonomousModeRequired && (
-                          <Radio
-                            className="h-3 w-3 shrink-0 text-amber-400"
-                            aria-hidden="true"
-                          />
-                        )}
-                      </div>
-                      <p className="mt-0.5 text-[10px] text-slate-400">
-                        {env.gravityLabel} · {env.commDelayLabel}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+          {/* 4 One-Click Judge Demo Scenario Pills */}
+          <div className="mt-8 flex flex-wrap items-center justify-center gap-2">
+            {DEMO_SCENARIOS.map((scenario) => {
+              const isSelected = activeScenarioId === scenario.id;
+              return (
+                <button
+                  key={scenario.id}
+                  type="button"
+                  onClick={() => handleSelectScenario(scenario)}
+                  aria-pressed={isSelected}
+                  className={`inline-flex h-10 items-center gap-2 rounded-full px-4 text-xs font-medium transition active:scale-[0.98] ${
+                    isSelected
+                      ? "bg-white text-[#0a0a0a] hover:bg-[#f5f4f0]"
+                      : "border border-white/10 bg-[#1a1a1a] text-white hover:border-white/25 hover:bg-[#222222]"
+                  }`}
+                >
+                  <span>{scenario.name}</span>
+                  <span
+                    className={`hidden rounded-full px-2 py-0.5 font-mono text-[10px] xl:inline-block ${
+                      isSelected
+                        ? "bg-[#0a0a0a]/10 text-[#0a0a0a]"
+                        : "bg-white/[0.06] text-[#7e828a]"
+                    }`}
+                  >
+                    {scenario.badge}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
 
-            <div className="lg:col-span-5">
-              <p className="mb-1.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
-                <Shield className="h-3 w-3 text-cyan-400" aria-hidden="true" />
-                Active NASA HRP Hazards ({envConfig.activeHazards.length}/5)
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {envConfig.activeHazards.map((hazardId) => {
+          {/* Active Scenario + Live Space Weather Telemetry Caption */}
+          <div className="mx-auto mt-4 flex flex-wrap items-center justify-center gap-2 text-xs text-[#7e828a]">
+            <span>
+              {activeScenario
+                ? activeScenario.description
+                : `${envConfig.name} · ${envConfig.subtitle}`}
+            </span>
+            {spaceWeather && (
+              <span
+                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 font-mono text-[10px] ${
+                  spaceWeather.isFallback
+                    ? "border-amber-500/25 bg-amber-500/10 text-amber-300"
+                    : "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+                }`}
+              >
+                <Sun className="h-3 w-3" aria-hidden="true" />
+                {spaceWeather.isFallback ? "OSDR RadLab Fallback" : "Live DONKI"}
+                {" · "}
+                {spaceWeather.summary}
+              </span>
+            )}
+          </div>
+        </section>
+
+        {/* Centerpiece x.ai/bot macOS Desktop Window Frame */}
+        <section
+          id="biotwin-console"
+          className="mx-auto mt-10 max-w-[1440px] px-4 sm:mt-12 sm:px-6"
+        >
+          <div className="overflow-hidden rounded-[20px] border border-white/10 bg-[#141414] shadow-2xl">
+            {/* macOS Window Title Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] bg-[#141414] px-4 py-3">
+              {/* Traffic Light Dots */}
+              <div className="flex items-center gap-2">
+                <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
+                <span className="h-3 w-3 rounded-full bg-[#ffbd2e]" />
+                <span className="h-3 w-3 rounded-full bg-[#28c840]" />
+                <span className="ml-2 hidden font-mono text-[11px] text-[#7e828a] sm:inline">
+                  {envConfig.name} · {envConfig.gravityLabel}
+                </span>
+              </div>
+
+              {/* Centered Active System Pill */}
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-[#202020] px-3.5 py-1 text-xs font-medium text-white">
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{
+                    backgroundColor: SYSTEM_ACCENT_HEX[selectedSystem],
+                  }}
+                />
+                <span>{selectedMeta.name}</span>
+                <span className="hidden font-mono text-[10px] text-[#7e828a] sm:inline">
+                  · {envConfig.commDelayLabel}
+                </span>
+              </div>
+
+              {/* Right Active NASA HRP Hazard Pills */}
+              <div className="hidden items-center gap-1.5 xl:flex">
+                <Shield
+                  className="mr-1 h-3.5 w-3.5 text-[#7e828a]"
+                  aria-hidden="true"
+                />
+                {envConfig.activeHazards.slice(0, 4).map((hazardId) => {
                   const hazard = NASA_HAZARDS[hazardId];
                   const weight = envConfig.hazardWeights[hazardId];
                   return (
@@ -380,70 +511,73 @@ export default function HomePage() {
                       target="_blank"
                       rel="noopener noreferrer"
                       title={hazard.description}
-                      className="inline-flex items-center gap-1 rounded-md border border-slate-700/80 bg-slate-950 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:border-cyan-500/60 hover:text-cyan-200"
+                      className="inline-flex items-center gap-1 rounded-full border border-white/[0.08] bg-[#1b1b1b] px-2.5 py-0.5 text-[10px] font-medium text-[#7e828a] transition hover:border-white/25 hover:text-white"
                     >
                       <span>{hazard.shortLabel}</span>
-                      <span className="font-mono text-[10px] text-cyan-400">
+                      <span className="font-mono text-white">
                         ×{weight.toFixed(1)}
                       </span>
                     </a>
                   );
                 })}
               </div>
+
+              {/* Compact Cascade Status Pill on smaller viewports */}
+              <div className="flex items-center xl:hidden">
+                {evaluation.activeCascades.length === 0 ? (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-medium text-emerald-300">
+                    <CheckCircle2 className="h-3 w-3" aria-hidden="true" />0
+                    Cascades
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-medium text-amber-300">
+                    <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                    {evaluation.activeCascades.length} Cascade
+                    {evaluation.activeCascades.length > 1 ? "s" : ""}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Window Interior: BioTwin Sidebar + Anatomical Viewport (7 cols) + Autonomous CMO (5 cols) */}
+            <div className="grid grid-cols-1 lg:grid-cols-12">
+              <div className="lg:col-span-7">
+                <BioTwinBodyMap
+                  assessments={evaluation.systems}
+                  cascades={evaluation.activeCascades}
+                  selectedSystem={selectedSystem}
+                  onSelectSystem={setSelectedSystem}
+                  vitals={vitals}
+                  envTelemetry={envTelemetry}
+                />
+              </div>
+
+              <div className="lg:col-span-5">
+                <AutonomousCmoPanel
+                  selectedSystem={selectedSystem}
+                  evaluation={evaluation}
+                  vitals={vitals}
+                  envTelemetry={envTelemetry}
+                  envId={envId}
+                />
+              </div>
             </div>
           </div>
+        </section>
 
-          {/* 4 One-Click Demo Scenarios */}
-          <div className="mt-3 border-t border-slate-800/80 pt-3">
-            <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-cyan-400">
-              <Sparkles className="h-3 w-3" aria-hidden="true" />
-              One-Click Space-Medicine Simulation Presets (Judge Demo Modes)
+        {/* Bento Telemetry Section (x.ai/bot Section 3 Layout) */}
+        <section className="mx-auto mt-20 max-w-[1440px] px-4 sm:mt-24 sm:px-6">
+          <div className="mx-auto max-w-2xl text-center">
+            <h2 className="text-3xl font-medium tracking-tight text-white text-balance sm:text-4xl lg:text-5xl">
+              Real-time physiological &amp; habitat telemetry
+            </h2>
+            <p className="mt-3 text-base text-[#7e828a] text-balance sm:text-lg">
+              Adjust astronaut vitals and closed-habitat sensor feeds to observe
+              live cascade propagation across 14 Sols.
             </p>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-              {DEMO_SCENARIOS.map((scenario) => {
-                const isSelected = activeScenarioId === scenario.id;
-                return (
-                  <button
-                    key={scenario.id}
-                    type="button"
-                    onClick={() => handleSelectScenario(scenario)}
-                    aria-pressed={isSelected}
-                    className={`flex flex-col justify-between rounded-lg border p-2.5 text-left transition ${
-                      isSelected
-                        ? "border-cyan-400 bg-cyan-950/45 shadow-sm shadow-cyan-500/20"
-                        : "border-slate-800 bg-slate-950/60 hover:border-slate-700"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-semibold text-slate-100">
-                        {scenario.name}
-                      </span>
-                      <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium text-cyan-300">
-                        {scenario.badge}
-                      </span>
-                    </div>
-                    <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-slate-400">
-                      {scenario.description}
-                    </p>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </header>
-
-        {/* Main 3-Column Open MCT Telemetry Grid */}
-        <main className="grid grid-cols-1 gap-5 lg:grid-cols-12">
-          <div className="lg:col-span-3">
-            <BioTwinBodyMap
-              assessments={evaluation.systems}
-              cascades={evaluation.activeCascades}
-              selectedSystem={selectedSystem}
-              onSelectSystem={setSelectedSystem}
-            />
           </div>
 
-          <div className="flex flex-col gap-5 lg:col-span-5">
+          <div className="mt-10 grid grid-cols-1 gap-6 lg:grid-cols-2">
             <VitalsInputPanel
               vitals={vitals}
               envTelemetry={envTelemetry}
@@ -459,61 +593,150 @@ export default function HomePage() {
               envId={envId}
             />
           </div>
+        </section>
 
-          <div className="lg:col-span-4">
-            <AutonomousCmoPanel
-              selectedSystem={selectedSystem}
-              evaluation={evaluation}
-              vitals={vitals}
-              envTelemetry={envTelemetry}
-              envId={envId}
-            />
+        {/* Countermeasure Routine Section */}
+        <section className="mx-auto mt-10 max-w-[1440px] px-4 sm:mt-12 sm:px-6">
+          <RoutineGamificationBar
+            tasks={DEFAULT_ROUTINE_TASKS}
+            progress={routineProgress}
+            onToggleTask={handleToggleRoutineTask}
+            onResetDay={handleResetRoutineDay}
+            onSelectSystem={setSelectedSystem}
+          />
+        </section>
+
+        {/* Bottom CTA & Signature x.ai/bot Concentric Orbital Hairline Graphic */}
+        <section className="relative mx-auto mt-24 overflow-hidden pt-12 text-center">
+          <div className="relative z-10 mx-auto max-w-2xl px-4 sm:px-6">
+            <h2 className="text-3xl font-medium tracking-tight text-white text-balance sm:text-4xl lg:text-5xl">
+              Autonomous readiness for every horizon
+            </h2>
+            <p className="mt-3 text-base text-[#7e828a] text-balance sm:text-lg">
+              Built on NASA Human Research Program risks, OSDR environmental
+              studies, and CSA space-radiation dosimetry.
+            </p>
+            <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={handleSyncSpaceWeather}
+                disabled={isSyncingWeather}
+                className="inline-flex h-11 items-center gap-2 rounded-full bg-white px-6 text-sm font-medium text-[#0a0a0a] transition hover:bg-[#f5f4f0] active:scale-[0.98] disabled:opacity-60"
+              >
+                <RefreshCw
+                  className={`h-4 w-4 ${isSyncingWeather ? "animate-spin" : ""}`}
+                  aria-hidden="true"
+                />
+                {isSyncingWeather
+                  ? "Syncing Live NASA DONKI..."
+                  : "Sync Live NASA DONKI"}
+              </button>
+              <a
+                href="#biotwin-console"
+                className="inline-flex h-11 items-center gap-2 rounded-full border border-white/10 bg-[#1a1a1a] px-6 text-sm font-medium text-white transition hover:border-white/25 hover:bg-[#222222]"
+              >
+                Return to BioTwin Console
+              </a>
+            </div>
           </div>
-        </main>
 
-        {/* Gamified Daily Countermeasure Checklist Bar */}
-        <RoutineGamificationBar
-          tasks={DEFAULT_ROUTINE_TASKS}
-          progress={routineProgress}
-          onToggleTask={handleToggleRoutineTask}
-          onResetDay={handleResetRoutineDay}
-          onSelectSystem={setSelectedSystem}
-        />
+          {/* Giant Concentric Hairline Orbital Graphic (x.ai/bot bottom hero motif) */}
+          <div
+            className="pointer-events-none relative mx-auto -mt-4 h-[210px] w-full max-w-[1200px] sm:h-[270px]"
+            aria-hidden="true"
+          >
+            <svg
+              viewBox="0 0 1200 320"
+              className="h-full w-full"
+              fill="none"
+              preserveAspectRatio="xMidYMin slice"
+            >
+              <circle
+                cx="600"
+                cy="420"
+                r="380"
+                stroke="rgba(255,255,255,0.12)"
+                strokeWidth="1"
+              />
+              <circle
+                cx="600"
+                cy="420"
+                r="310"
+                stroke="rgba(255,255,255,0.08)"
+                strokeWidth="1"
+              />
+              <circle
+                cx="600"
+                cy="420"
+                r="230"
+                stroke="rgba(255,255,255,0.06)"
+                strokeWidth="1"
+              />
+              {/* Tilted Geometric BioTwin Eye Cutouts */}
+              <g transform="rotate(-12 600 280)">
+                <rect
+                  x="522"
+                  y="210"
+                  width="44"
+                  height="112"
+                  rx="22"
+                  stroke="rgba(255,255,255,0.12)"
+                  strokeWidth="1"
+                />
+                <rect
+                  x="612"
+                  y="202"
+                  width="44"
+                  height="112"
+                  rx="22"
+                  stroke="rgba(255,255,255,0.12)"
+                  strokeWidth="1"
+                />
+              </g>
+            </svg>
+            <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-[#0a0a0a] to-transparent" />
+          </div>
+        </section>
+      </main>
 
-        {/* Official NASA / CSA / OSDR Citations Footer */}
-        <footer className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-xs text-slate-400">
+      {/* Scientific Citations Footer */}
+      <footer
+        id="citations"
+        className="border-t border-white/[0.07] bg-[#0a0a0a] py-10 text-xs text-[#7e828a]"
+      >
+        <div className="mx-auto max-w-[1440px] px-4 sm:px-6">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-2 font-semibold text-slate-200">
-              <Activity className="h-4 w-4 text-cyan-400" aria-hidden="true" />
+            <div className="flex items-center gap-2 font-medium text-white">
+              <Activity className="h-4 w-4 text-[#7e828a]" aria-hidden="true" />
               <span>
                 Scientific Reference &amp; Open-Data Citations (NASA HRP · OSDR
                 · CSA · DONKI)
               </span>
             </div>
-            <span className="text-[11px] text-slate-500">
+            <span className="font-mono text-[11px] text-[#7e828a]">
               MIT License · Open-Source Prototype (NASA Space Apps Almaty 2026)
             </span>
           </div>
 
-          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-5 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
             {OFFICIAL_CHALLENGE_LINKS.map((link) => (
               <a
                 key={link.url}
                 href={link.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 text-[11px] text-slate-300 transition hover:border-cyan-500/50 hover:text-cyan-200"
+                className="flex items-center justify-between gap-2 rounded-2xl border border-white/[0.07] bg-[#141414] px-4 py-3 text-xs text-[#7e828a] transition hover:border-white/20 hover:text-white"
               >
                 <span className="truncate">{link.label}</span>
                 <ExternalLink
-                  className="h-3.5 w-3.5 shrink-0 text-cyan-400"
+                  className="h-3.5 w-3.5 shrink-0 text-[#7e828a]"
                   aria-hidden="true"
                 />
               </a>
             ))}
           </div>
-        </footer>
-      </div>
+        </div>
+      </footer>
     </div>
   );
 }

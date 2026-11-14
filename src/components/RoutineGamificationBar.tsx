@@ -25,6 +25,15 @@ export interface RoutineGamificationBarProps {
   onSelectSystem?: (system: BodySystemId) => void;
 }
 
+const SYSTEM_DOT_COLOR: Record<BodySystemId, string> = {
+  neuro_ocular: "#2dd4bf",
+  behavioral_circadian: "#818cf8",
+  cardiovascular: "#fb7185",
+  immune_hematology: "#c084fc",
+  metabolic_endocrine: "#f97316",
+  musculoskeletal_renal: "#4ade80",
+};
+
 function getCrewRankLabel(xp: number): string {
   if (xp >= 115) {
     return "Tier 3 · Autonomous CMO";
@@ -52,116 +61,134 @@ export function RoutineGamificationBar({
   return (
     <section
       aria-label="Daily Countermeasure Routine and Crew Adherence"
-      className="rounded-xl border border-slate-800 bg-slate-900/80 p-4 shadow-lg"
+      className="rounded-3xl border border-white/[0.08] bg-[#1a1a1a] p-6 sm:p-8"
     >
       {/* Header Row */}
-      <div className="flex flex-col gap-3 border-b border-slate-800/80 pb-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-4 border-b border-white/[0.07] pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-widest text-cyan-400">
-            Daily Countermeasure Adherence
+          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#7e828a]">
+            Crew Habit &amp; Preventative Adherence
           </p>
-          <h2 className="text-sm font-semibold text-slate-100">
-            Crew Habit &amp; Preventative Protocol Checklist ({completedCount}/
-            {tasks.length} Complete · {pct}%)
+          <h2 className="mt-1.5 text-2xl font-medium tracking-tight text-white sm:text-3xl">
+            Daily Countermeasure Protocols
           </h2>
+          <p className="mt-1 text-sm text-[#7e828a]">
+            {completedCount} of {tasks.length} spaceflight countermeasures
+            verified today ({pct}% complete)
+          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-200">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/20 bg-amber-500/10 px-3.5 py-1.5 font-mono text-xs font-medium text-amber-300">
             <Flame className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
             {progress.streakSols} Sol Streak
           </span>
 
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/40 bg-cyan-500/15 px-3 py-1 text-xs font-semibold text-cyan-200">
-            <Award className="h-3.5 w-3.5 text-cyan-300" aria-hidden="true" />
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-[#141414] px-3.5 py-1.5 font-mono text-xs font-medium text-white">
+            <Award className="h-3.5 w-3.5 text-[#7e828a]" aria-hidden="true" />
             {progress.xp} / {totalXp} XP · {rankLabel}
           </span>
 
           <button
             type="button"
             onClick={onResetDay}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1 text-xs font-medium text-slate-300 transition hover:border-slate-500 hover:text-white"
+            className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-[#202020] px-3.5 py-1.5 text-xs font-medium text-white transition hover:border-white/25 hover:bg-[#2b2b2b] active:scale-[0.98]"
           >
-            <RotateCcw className="h-3 w-3" aria-hidden="true" />
+            <RotateCcw className="h-3 w-3 text-[#7e828a]" aria-hidden="true" />
             Reset Sol Checklist
           </button>
         </div>
       </div>
 
-      {/* XP Completion Progress Bar */}
-      <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-950">
+      {/* Monochrome-to-Emerald Progress Track */}
+      <div className="mt-5 h-1.5 w-full overflow-hidden rounded-full bg-[#141414]">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-cyan-500 via-sky-400 to-emerald-400 transition-all duration-300"
+          className={`h-full rounded-full transition-all duration-300 ${
+            pct === 100
+              ? "bg-[#4ade80]"
+              : "bg-gradient-to-r from-white to-[#4ade80]"
+          }`}
           style={{ width: `${pct}%` }}
         />
       </div>
 
       {/* Interactive 5-Task Countermeasure Cards */}
-      <div className="mt-3 grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-5">
+      <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
         {tasks.map((task) => {
           const done = completedSet.has(task.id);
           const systemMeta = BODY_SYSTEM_METADATA[task.category];
+          const dotColor = SYSTEM_DOT_COLOR[task.category];
+
           return (
             <div
               key={task.id}
-              className={`flex flex-col justify-between rounded-lg border p-3 transition ${
+              className={`flex flex-col justify-between rounded-2xl border p-4 transition ${
                 done
-                  ? "border-emerald-500/50 bg-emerald-950/25"
-                  : "border-slate-800 bg-slate-950/70 hover:border-slate-700"
+                  ? "border-emerald-500/30 bg-emerald-500/[0.06]"
+                  : "border-white/[0.07] bg-[#141414] hover:border-white/15"
               }`}
             >
               <div>
+                <div className="mb-2.5 flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-[#1b1b1b] px-2.5 py-0.5 text-[10px] font-medium text-[#7e828a]">
+                    <span
+                      className="h-1.5 w-1.5 rounded-full"
+                      style={{ backgroundColor: dotColor }}
+                    />
+                    {systemMeta.shortLabel}
+                  </span>
+
+                  <span className="font-mono text-[10px] font-medium text-white">
+                    +{task.xp} XP
+                  </span>
+                </div>
+
                 <button
                   type="button"
                   onClick={() => onToggleTask(task.id)}
                   aria-pressed={done}
-                  className="flex w-full items-start gap-2 text-left"
+                  className="flex w-full items-start gap-2.5 text-left"
                 >
                   {done ? (
                     <CheckSquare
-                      className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400"
+                      className="mt-0.5 h-4 w-4 shrink-0 text-[#4ade80]"
                       aria-hidden="true"
                     />
                   ) : (
                     <Square
-                      className="mt-0.5 h-4 w-4 shrink-0 text-slate-500"
+                      className="mt-0.5 h-4 w-4 shrink-0 text-[#7e828a]"
                       aria-hidden="true"
                     />
                   )}
                   <span
-                    className={`text-xs font-semibold leading-snug ${
-                      done ? "text-emerald-200 line-through" : "text-slate-100"
+                    className={`text-xs font-medium leading-snug ${
+                      done ? "text-emerald-200 line-through" : "text-white"
                     }`}
                   >
                     {task.title}
                   </span>
                 </button>
 
-                <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+                <p className="mt-2 text-[11px] leading-relaxed text-[#7e828a]">
                   {task.nasaProtocolNote}
                 </p>
               </div>
 
-              <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-slate-800/70 pt-2">
-                <div className="flex items-center gap-2 text-[10px] font-medium">
-                  <span className="rounded bg-cyan-500/15 px-1.5 py-0.5 font-mono text-cyan-300">
-                    +{task.xp} XP
-                  </span>
-                  <span className="inline-flex items-center gap-1 text-slate-400">
-                    <Clock className="h-3 w-3" aria-hidden="true" />
-                    {task.durationMin}m
-                  </span>
-                </div>
+              <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/[0.06] pt-2.5">
+                <span className="inline-flex items-center gap-1 font-mono text-[10px] text-[#7e828a]">
+                  <Clock className="h-3 w-3" aria-hidden="true" />
+                  {task.durationMin}m
+                </span>
 
                 {onSelectSystem && (
                   <button
                     type="button"
                     onClick={() => onSelectSystem(task.category)}
                     title={`Inspect ${systemMeta.name} in BioTwin & CMO Panel`}
-                    className="inline-flex items-center gap-0.5 text-[10px] font-medium text-cyan-300 hover:text-cyan-200 hover:underline"
+                    className="inline-flex items-center gap-0.5 text-[11px] font-medium text-white transition hover:text-[#7e828a]"
                   >
-                    <span>{systemMeta.shortLabel}</span>
-                    <ArrowUpRight className="h-2.5 w-2.5" aria-hidden="true" />
+                    <span>Inspect</span>
+                    <ArrowUpRight className="h-3 w-3" aria-hidden="true" />
                   </button>
                 )}
               </div>

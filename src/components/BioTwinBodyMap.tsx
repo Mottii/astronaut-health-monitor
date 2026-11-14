@@ -1,13 +1,25 @@
 "use client";
 
-import React from "react";
-import { AlertTriangle, ArrowRight, CheckCircle2, Radio } from "lucide-react";
+import React, { useState } from "react";
+import {
+  AlertTriangle,
+  Box,
+  CheckCircle2,
+  Layers,
+  RotateCcw,
+} from "lucide-react";
+import {
+  BioTwin3DStage,
+  type ClinicalVisualMode,
+} from "@/components/BioTwin3DStage";
 import { BODY_SYSTEM_METADATA } from "@/data/nasaHrpData";
 import type {
   BodySystemId,
   CascadeLink,
+  EnvironmentTelemetry,
   SystemAssessment,
   TriageStatus,
+  VitalReadings,
 } from "@/types/health";
 
 export interface BioTwinBodyMapProps {
@@ -15,6 +27,8 @@ export interface BioTwinBodyMapProps {
   cascades: CascadeLink[];
   selectedSystem: BodySystemId;
   onSelectSystem: (systemId: BodySystemId) => void;
+  vitals?: VitalReadings;
+  envTelemetry?: EnvironmentTelemetry;
 }
 
 const SYSTEM_ORDER: BodySystemId[] = [
@@ -26,37 +40,61 @@ const SYSTEM_ORDER: BodySystemId[] = [
   "musculoskeletal_renal",
 ];
 
+const SYSTEM_AVATAR_COLOR: Record<
+  BodySystemId,
+  { hex: string; shapeClass: string; tilt: string }
+> = {
+  neuro_ocular: { hex: "#2dd4bf", shapeClass: "rounded-full", tilt: "-rotate-6" },
+  behavioral_circadian: { hex: "#818cf8", shapeClass: "rounded-[14px]", tilt: "rotate-6" },
+  cardiovascular: { hex: "#fb7185", shapeClass: "rounded-full", tilt: "-rotate-3" },
+  immune_hematology: { hex: "#c084fc", shapeClass: "rounded-[14px]", tilt: "rotate-3" },
+  metabolic_endocrine: { hex: "#f97316", shapeClass: "rounded-full", tilt: "-rotate-6" },
+  musculoskeletal_renal: { hex: "#4ade80", shapeClass: "rounded-[14px]", tilt: "rotate-3" },
+};
+
 const STATUS_STYLE: Record<
   TriageStatus,
   {
-    fill: string;
-    stroke: string;
-    badgeBg: string;
-    badgeText: string;
+    color: string;
+    dotClass: string;
+    pillClass: string;
     label: string;
   }
 > = {
   green: {
-    fill: "#10b981",
-    stroke: "#34d399",
-    badgeBg: "bg-emerald-500/15 border-emerald-500/40",
-    badgeText: "text-emerald-300",
+    color: "#34d399",
+    dotClass: "bg-emerald-400",
+    pillClass: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300",
     label: "NOMINAL",
   },
   amber: {
-    fill: "#f59e0b",
-    stroke: "#fbbf24",
-    badgeBg: "bg-amber-500/15 border-amber-500/40",
-    badgeText: "text-amber-300",
+    color: "#fbbf24",
+    dotClass: "bg-amber-400",
+    pillClass: "border-amber-500/25 bg-amber-500/10 text-amber-300",
     label: "CAUTION",
   },
   red: {
-    fill: "#ef4444",
-    stroke: "#f87171",
-    badgeBg: "bg-rose-500/15 border-rose-500/40",
-    badgeText: "text-rose-300",
+    color: "#f87171",
+    dotClass: "bg-rose-400",
+    pillClass: "border-rose-500/30 bg-rose-500/15 text-rose-300",
     label: "ALERT",
   },
+};
+
+interface BlueprintNodeConfig {
+  cx: number;
+  cy: number;
+  side: "left" | "right";
+  labelY: number;
+}
+
+const BLUEPRINT_NODES: Record<BodySystemId, BlueprintNodeConfig> = {
+  behavioral_circadian: { cx: 200, cy: 46, side: "left", labelY: 36 },
+  neuro_ocular: { cx: 220, cy: 58, side: "right", labelY: 48 },
+  immune_hematology: { cx: 208, cy: 128, side: "left", labelY: 118 },
+  cardiovascular: { cx: 221, cy: 154, side: "right", labelY: 146 },
+  metabolic_endocrine: { cx: 191, cy: 188, side: "left", labelY: 182 },
+  musculoskeletal_renal: { cx: 227, cy: 214, side: "right", labelY: 208 },
 };
 
 function buildCascadeCurvePath(
@@ -64,14 +102,41 @@ function buildCascadeCurvePath(
   toId: BodySystemId,
   index: number
 ): string {
-  const from = BODY_SYSTEM_METADATA[fromId].svgCoords;
-  const to = BODY_SYSTEM_METADATA[toId].svgCoords;
+  const from = BLUEPRINT_NODES[fromId];
+  const to = BLUEPRINT_NODES[toId];
   const midX = (from.cx + to.cx) / 2;
   const midY = (from.cy + to.cy) / 2;
-  const curveOffset = index % 2 === 0 ? -36 : 36;
+  const curveOffset = index % 2 === 0 ? -46 : 46;
   const ctrlX = midX + curveOffset;
-  const ctrlY = midY - 10;
+  const ctrlY = midY - 12;
   return `M ${from.cx} ${from.cy} Q ${ctrlX} ${ctrlY} ${to.cx} ${to.cy}`;
+}
+
+function BotMarkAvatar({
+  color,
+  shapeClass,
+  tilt,
+  size = "md",
+}: {
+  color: string;
+  shapeClass: string;
+  tilt?: string;
+  size?: "sm" | "md";
+}) {
+  const dim = size === "sm" ? "h-7 w-7" : "h-10 w-10";
+  const eyeW = size === "sm" ? "w-[2.5px] h-[6px]" : "w-[3.5px] h-[9px]";
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center justify-center ${dim} ${shapeClass} shadow-inner`}
+      style={{ backgroundColor: color }}
+      aria-hidden="true"
+    >
+      <span className={`flex items-center gap-[3px] ${tilt ?? ""}`}>
+        <span className={`${eyeW} rounded-full bg-[#0a0a0a]`} />
+        <span className={`${eyeW} rounded-full bg-[#0a0a0a]`} />
+      </span>
+    </span>
+  );
 }
 
 export function BioTwinBodyMap({
@@ -79,301 +144,567 @@ export function BioTwinBodyMap({
   cascades,
   selectedSystem,
   onSelectSystem,
+  vitals,
+  envTelemetry,
 }: BioTwinBodyMapProps) {
+  const [viewMode, setViewMode] = useState<"3d" | "2d">("3d");
+  const [visualMode, setVisualMode] = useState<ClinicalVisualMode>("atlas");
+  const [autoRotate, setAutoRotate] = useState(false);
+  const [cameraResetToken, setCameraResetToken] = useState(0);
+
   return (
     <section
       aria-label="BioTwin Anatomical Body Map"
-      className="flex flex-col rounded-xl border border-slate-800 bg-slate-900/80 p-4 shadow-lg"
+      className="flex flex-col lg:h-[740px] lg:flex-row"
     >
-      <div className="mb-3 flex items-center justify-between gap-2">
+      {/* Left Sidebar (x.ai/bot Desktop App Sidebar Style) */}
+      <aside className="flex shrink-0 flex-col justify-between border-b border-white/[0.07] bg-[#141414] p-4 lg:w-[296px] lg:overflow-y-auto lg:border-r lg:border-b-0">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-widest text-cyan-400">
-            BioTwin Anatomy Map
-          </p>
-          <h2 className="text-sm font-semibold text-slate-100">
-            Click Body Region for Spaceflight Triage
-          </h2>
-        </div>
-        <div className="flex items-center gap-2 text-[10px] font-medium">
-          <span className="flex items-center gap-1 text-emerald-300">
-            <span className="h-2 w-2 rounded-full bg-emerald-400" />
-            OK
-          </span>
-          <span className="flex items-center gap-1 text-amber-300">
-            <span className="h-2 w-2 rounded-full bg-amber-400" />
-            Caution
-          </span>
-          <span className="flex items-center gap-1 text-rose-300">
-            <span className="h-2 w-2 rounded-full bg-rose-500" />
-            Alert
-          </span>
-        </div>
-      </div>
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#7e828a]">
+              Organ Nodes
+            </span>
+            <span className="font-mono text-[11px] text-[#7e828a]">
+              6 Systems
+            </span>
+          </div>
 
-      {/* Interactive Anatomical SVG */}
-      <div className="relative flex justify-center rounded-lg border border-slate-800/80 bg-slate-950/90 p-2">
-        <svg
-          viewBox="0 0 280 320"
-          className="h-[310px] w-full max-w-[280px]"
-          role="img"
-          aria-label="Interactive astronaut anatomical telemetry diagram"
-        >
-          <defs>
-            <pattern
-              id="telemetry-grid"
-              width="20"
-              height="20"
-              patternUnits="userSpaceOnUse"
-            >
-              <path
-                d="M 20 0 L 0 0 0 20"
-                fill="none"
-                stroke="#0f172a"
-                strokeWidth="1"
-              />
-            </pattern>
-            <marker
-              id="arrow-amber"
-              viewBox="0 0 10 10"
-              refX="8"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 1 L 10 5 L 0 9 z" fill="#fbbf24" />
-            </marker>
-            <marker
-              id="arrow-red"
-              viewBox="0 0 10 10"
-              refX="8"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 1 L 10 5 L 0 9 z" fill="#f87171" />
-            </marker>
-          </defs>
+          {/* 3x2 Signature Squircle Avatar Grid */}
+          <div className="grid grid-cols-3 gap-2">
+            {SYSTEM_ORDER.map((systemId) => {
+              const meta = BODY_SYSTEM_METADATA[systemId];
+              const assessment = assessments[systemId];
+              const style = STATUS_STYLE[assessment.status];
+              const avatar = SYSTEM_AVATAR_COLOR[systemId];
+              const isSelected = selectedSystem === systemId;
 
-          <rect width="280" height="320" fill="url(#telemetry-grid)" />
-
-          {/* Anatomical Human Silhouette */}
-          <g
-            fill="#0f172a"
-            stroke="#334155"
-            strokeWidth="1.6"
-            strokeLinejoin="round"
-          >
-            {/* Head */}
-            <circle cx="140" cy="48" r="23" />
-            {/* Neck */}
-            <path d="M 131 70 L 131 84 L 149 84 L 149 70" />
-            {/* Torso & Shoulders */}
-            <path d="M 131 84 L 94 90 Q 78 93 74 112 L 58 184 Q 56 193 65 194 Q 73 194 77 185 L 94 124 L 99 194 L 104 298 Q 105 307 116 307 Q 126 307 127 298 L 136 218 L 144 218 L 153 298 Q 154 307 164 307 Q 175 307 176 298 L 181 194 L 186 124 L 203 185 Q 207 194 215 194 Q 224 193 222 184 L 206 112 Q 202 93 186 90 L 149 84 Z" />
-          </g>
-
-          {/* Subtle Internal Organ Reference Outlines */}
-          <g fill="none" stroke="#1e293b" strokeWidth="1.2">
-            <ellipse cx="140" cy="46" rx="14" ry="12" />
-            <path d="M 140 84 L 140 198" strokeDasharray="3 3" />
-            <ellipse cx="148" cy="118" rx="13" ry="11" />
-            <ellipse cx="124" cy="172" rx="9" ry="12" />
-            <ellipse cx="156" cy="172" rx="9" ry="12" />
-          </g>
-
-          {/* Active Domino Cascade Bezier Connectors */}
-          {cascades.map((cascade, index) => {
-            const pathD = buildCascadeCurvePath(
-              cascade.fromSystem,
-              cascade.toSystem,
-              index
-            );
-            const isRed = cascade.severity === "red";
-            return (
-              <g key={cascade.id}>
-                <path
-                  d={pathD}
-                  fill="none"
-                  stroke={isRed ? "#f87171" : "#fbbf24"}
-                  strokeWidth="2.4"
-                  strokeDasharray="5 4"
-                  markerEnd={isRed ? "url(#arrow-red)" : "url(#arrow-amber)"}
+              return (
+                <button
+                  key={systemId}
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => onSelectSystem(systemId)}
+                  className={`group relative flex flex-col items-center rounded-2xl border p-2.5 text-center transition active:scale-[0.98] ${
+                    isSelected
+                      ? "border-white/20 bg-[#202020] shadow-sm"
+                      : "border-transparent bg-transparent hover:border-white/[0.08] hover:bg-[#1b1b1b]"
+                  }`}
                 >
-                  <animate
-                    attributeName="stroke-dashoffset"
-                    from="18"
-                    to="0"
-                    dur="1.1s"
-                    repeatCount="indefinite"
+                  <span
+                    className={`absolute top-2 right-2 h-1.5 w-1.5 rounded-full ${style.dotClass}`}
+                    title={style.label}
                   />
-                </path>
-              </g>
-            );
-          })}
 
-          {/* 6 Clickable Organ Nodes */}
-          {SYSTEM_ORDER.map((systemId) => {
-            const meta = BODY_SYSTEM_METADATA[systemId];
-            const assessment = assessments[systemId];
-            const style = STATUS_STYLE[assessment.status];
-            const isSelected = selectedSystem === systemId;
-            const { cx, cy } = meta.svgCoords;
-
-            return (
-              <g
-                key={systemId}
-                role="button"
-                tabIndex={0}
-                aria-label={`${meta.name}: ${style.label}`}
-                aria-pressed={isSelected}
-                onClick={() => onSelectSystem(systemId)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onSelectSystem(systemId);
-                  }
-                }}
-                className="cursor-pointer focus:outline-none"
-              >
-                {assessment.status === "red" && (
-                  <circle
-                    cx={cx}
-                    cy={cy}
-                    r="16"
-                    fill="none"
-                    stroke="#ef4444"
-                    strokeWidth="2"
-                    opacity="0.7"
-                  >
-                    <animate
-                      attributeName="r"
-                      values="11;21;11"
-                      dur="1.6s"
-                      repeatCount="indefinite"
-                    />
-                    <animate
-                      attributeName="opacity"
-                      values="0.8;0.1;0.8"
-                      dur="1.6s"
-                      repeatCount="indefinite"
-                    />
-                  </circle>
-                )}
-
-                {isSelected && (
-                  <circle
-                    cx={cx}
-                    cy={cy}
-                    r="14"
-                    fill="none"
-                    stroke="#22d3ee"
-                    strokeWidth="2.5"
+                  <BotMarkAvatar
+                    color={avatar.hex}
+                    shapeClass={avatar.shapeClass}
+                    tilt={avatar.tilt}
                   />
-                )}
 
-                <circle
-                  cx={cx}
-                  cy={cy}
-                  r="9"
-                  fill={style.fill}
-                  stroke="#020617"
-                  strokeWidth="2"
-                />
-
-                {/* Label pill offset left/right cleanly */}
-                <title>{`${meta.name} — ${assessment.headline}`}</title>
-              </g>
-            );
-          })}
-        </svg>
-
-        <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-slate-900/85 px-2 py-0.5 text-[10px] text-slate-400">
-          {cascades.length > 0
-            ? `${cascades.length} active organ cascade${
-                cascades.length > 1 ? "s" : ""
-              }`
-            : "0 active cascades"}
+                  <span className="mt-2 line-clamp-1 text-[11px] font-medium text-white">
+                    {meta.shortLabel.split(" / ")[0]}
+                  </span>
+                  <span className="mt-0.5 font-mono text-[10px] tabular-nums text-[#7e828a]">
+                    {assessment.score}/100
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
 
-      {/* Keyboard-Accessible Synchronized Organ Selector Grid */}
-      <div className="mt-3 grid grid-cols-2 gap-1.5">
-        {SYSTEM_ORDER.map((systemId) => {
-          const meta = BODY_SYSTEM_METADATA[systemId];
-          const assessment = assessments[systemId];
-          const style = STATUS_STYLE[assessment.status];
-          const isSelected = selectedSystem === systemId;
-
-          return (
-            <button
-              key={systemId}
-              type="button"
-              aria-pressed={isSelected}
-              onClick={() => onSelectSystem(systemId)}
-              className={`flex items-center justify-between rounded-lg border px-2.5 py-2 text-left transition ${
-                isSelected
-                  ? "border-cyan-400 bg-cyan-950/40 ring-1 ring-cyan-400/50"
-                  : "border-slate-800 bg-slate-950/60 hover:border-slate-700"
+        {/* Bottom Domino Cascade Monitor Feed */}
+        <div className="mt-5 border-t border-white/[0.07] pt-4">
+          <div className="mb-2.5 flex items-center justify-between">
+            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#7e828a]">
+              Domino Cascades
+            </span>
+            <span
+              className={`rounded-full border px-2 py-0.5 font-mono text-[10px] tabular-nums ${
+                cascades.length > 0
+                  ? "border-amber-500/25 bg-amber-500/10 text-amber-300"
+                  : "border-white/10 bg-[#1b1b1b] text-[#7e828a]"
               }`}
             >
-              <span className="truncate text-xs font-medium text-slate-200">
-                {meta.shortLabel}
-              </span>
-              <span
-                className={`ml-1.5 rounded border px-1.5 py-0.5 text-[10px] font-bold ${style.badgeBg} ${style.badgeText}`}
-              >
-                {assessment.score}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Active Multi-Organ Cascade Callouts */}
-      <div className="mt-3 space-y-2">
-        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-          <Radio className="h-3.5 w-3.5 text-cyan-400" />
-          <span>Domino Cascade Monitor</span>
-        </div>
-
-        {cascades.length === 0 ? (
-          <div className="flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-950/20 px-3 py-2 text-xs text-emerald-300">
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
-            <span>No cross-organ hazard cascades triggered.</span>
+              {cascades.length} Active
+            </span>
           </div>
-        ) : (
-          cascades.map((cascade) => {
-            const isRed = cascade.severity === "red";
-            return (
+
+          {cascades.length === 0 ? (
+            <div className="flex items-start gap-2.5 rounded-xl bg-[#1b1b1b]/80 p-2.5">
+              <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-400">
+                <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-white">
+                  All Cascades Nominal
+                </p>
+                <p className="mt-0.5 text-[11px] leading-snug text-[#7e828a]">
+                  No cross-organ hazard dominoes triggered.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {cascades.map((cascade) => {
+                const isRed = cascade.severity === "red";
+                return (
+                  <button
+                    key={cascade.id}
+                    type="button"
+                    onClick={() => onSelectSystem(cascade.toSystem)}
+                    className="flex w-full items-start gap-2.5 rounded-xl border border-transparent bg-[#1b1b1b]/70 p-2.5 text-left transition hover:border-white/10 hover:bg-[#202020]"
+                  >
+                    <BotMarkAvatar
+                      color={isRed ? "#f87171" : "#fbbf24"}
+                      shapeClass="rounded-full"
+                      size="sm"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-1.5">
+                        <p className="truncate text-xs font-medium text-white">
+                          {cascade.title}
+                        </p>
+                        <AlertTriangle
+                          className={`h-3 w-3 shrink-0 ${
+                            isRed ? "text-rose-400" : "text-amber-400"
+                          }`}
+                          aria-hidden="true"
+                        />
+                      </div>
+                      <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-[#7e828a]">
+                        {cascade.immediateAction}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </aside>
+
+      {/* Center Anatomical Viewport */}
+      <div className="relative flex min-w-0 flex-1 flex-col justify-between overflow-hidden bg-[#0a0a0a] p-4 sm:p-5">
+        {/* Viewport Top Telemetry Strip */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-mono text-[11px] uppercase tracking-wider text-[#7e828a] tabular-nums">
+              {viewMode === "3d"
+                ? "BIOTWIN // HRA-3D CLINICAL"
+                : "BIOTWIN // X:210 Y:220"}
+            </span>
+
+            <div
+              role="group"
+              aria-label="BioTwin view mode"
+              className="inline-flex items-center rounded-full border border-white/10 bg-[#141414] p-0.5"
+            >
               <button
-                key={cascade.id}
                 type="button"
-                onClick={() => onSelectSystem(cascade.toSystem)}
-                className={`w-full rounded-lg border p-2.5 text-left transition ${
-                  isRed
-                    ? "border-rose-500/40 bg-rose-950/30 hover:border-rose-400"
-                    : "border-amber-500/40 bg-amber-950/30 hover:border-amber-400"
+                onClick={() => setViewMode("3d")}
+                aria-pressed={viewMode === "3d"}
+                className={`inline-flex cursor-pointer items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+                  viewMode === "3d"
+                    ? "bg-white text-black"
+                    : "text-[#7e828a] hover:text-white"
                 }`}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span
-                    className={`flex items-center gap-1.5 text-xs font-semibold ${
-                      isRed ? "text-rose-300" : "text-amber-300"
+                <Box className="h-3 w-3" aria-hidden="true" />
+                3D BioTwin
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("2d")}
+                aria-pressed={viewMode === "2d"}
+                className={`inline-flex cursor-pointer items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+                  viewMode === "2d"
+                    ? "bg-white text-black"
+                    : "text-[#7e828a] hover:text-white"
+                }`}
+              >
+                <Layers className="h-3 w-3" aria-hidden="true" />
+                2D Blueprint
+              </button>
+            </div>
+          </div>
+
+          {viewMode === "3d" && (
+            <div className="flex flex-wrap items-center justify-between gap-1.5">
+              <div
+                role="group"
+                aria-label="Clinical visualization mode"
+                className="inline-flex items-center rounded-full border border-white/10 bg-[#141414] p-0.5"
+              >
+                {(
+                  [
+                    ["atlas", "Atlas"],
+                    ["xray", "X-Ray CT"],
+                    ["vascular", "Vascular"],
+                  ] as const
+                ).map(([modeKey, label]) => (
+                  <button
+                    key={modeKey}
+                    type="button"
+                    onClick={() => setVisualMode(modeKey)}
+                    aria-pressed={visualMode === modeKey}
+                    className={`cursor-pointer rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+                      visualMode === modeKey
+                        ? "bg-white/15 text-white"
+                        : "text-[#7e828a] hover:text-white"
                     }`}
                   >
-                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                    {cascade.title}
-                  </span>
-                  <ArrowRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                </div>
-                <p className="mt-1 text-[11px] leading-snug text-slate-300">
-                  {cascade.immediateAction}
-                </p>
-              </button>
-            );
-          })
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setAutoRotate((prev) => !prev)}
+                  aria-pressed={autoRotate}
+                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    autoRotate
+                      ? "border-white/25 bg-white/15 text-white"
+                      : "border-white/10 bg-[#141414] text-[#7e828a] hover:text-white"
+                  }`}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      autoRotate ? "bg-emerald-400" : "bg-[#7e828a]"
+                    }`}
+                  />
+                  Auto-Rotate
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setCameraResetToken((n) => n + 1)}
+                  className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-white/10 bg-[#141414] px-2.5 py-1 text-[11px] font-medium text-[#7e828a] transition-colors hover:border-white/20 hover:text-white"
+                >
+                  <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                  Reset View
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Center Viewport Body: Interactive 3D Organ Atlas or 2D Blueprint SVG */}
+        {viewMode === "3d" ? (
+          <div className="relative my-2 flex-1 min-h-[460px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#070708] lg:min-h-0">
+            <BioTwin3DStage
+              assessments={assessments}
+              cascades={cascades}
+              selectedSystem={selectedSystem}
+              onSelectSystem={onSelectSystem}
+              vitals={vitals}
+              envTelemetry={envTelemetry}
+              visualMode={visualMode}
+              autoRotate={autoRotate}
+              cameraResetToken={cameraResetToken}
+            />
+          </div>
+        ) : (
+          <div className="my-2 flex flex-1 items-center justify-center">
+            <svg
+              viewBox="0 0 420 440"
+              className="h-[420px] w-full max-w-[460px] sm:h-[520px]"
+              role="img"
+              aria-label="Interactive astronaut anatomical telemetry diagram"
+            >
+            <defs>
+              <filter id="node-glow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="3" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+              <marker
+                id="arrow-amber"
+                viewBox="0 0 10 10"
+                refX="8"
+                refY="5"
+                markerWidth="5"
+                markerHeight="5"
+                orient="auto-start-reverse"
+              >
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="#fbbf24" />
+              </marker>
+              <marker
+                id="arrow-red"
+                viewBox="0 0 10 10"
+                refX="8"
+                refY="5"
+                markerWidth="5"
+                markerHeight="5"
+                orient="auto-start-reverse"
+              >
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="#f87171" />
+              </marker>
+            </defs>
+
+            {/* Concentric Orbital Hairlines & Architectural Calibration Crosshairs */}
+            <g fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="1">
+              <circle cx="210" cy="215" r="88" />
+              <circle cx="210" cy="215" r="142" strokeDasharray="3 5" />
+              <circle cx="210" cy="215" r="192" />
+              <line x1="210" y1="12" x2="210" y2="428" strokeDasharray="2 6" />
+              <line x1="122" y1="215" x2="298" y2="215" strokeDasharray="2 6" />
+              {/* Corner Crosshair Ticks */}
+              <path d="M 16 24 L 16 14 L 26 14" />
+              <path d="M 394 14 L 404 14 L 404 24" />
+              <path d="M 16 416 L 16 426 L 26 426" />
+              <path d="M 394 426 L 404 426 L 404 416" />
+            </g>
+
+            {/* Anatomical Human Silhouette (Proportioned Cranium, Torso, Limbs) */}
+            <g
+              fill="rgba(255,255,255,0.025)"
+              stroke="rgba(255,255,255,0.24)"
+              strokeWidth="1.25"
+              strokeLinejoin="round"
+            >
+              {/* Cranium & Jaw */}
+              <path d="M 210 24 C 194 24 185 36 185 52 C 185 64 191 74 199 80 L 210 83 L 221 80 C 229 74 235 64 235 52 C 235 36 226 24 210 24 Z" />
+              {/* Neck, Trapezius, Arms, Torso & Legs */}
+              <path d="M 200 81 L 198 96 L 162 104 C 148 107 141 118 138 134 L 128 194 L 122 244 C 121 251 128 254 133 248 L 144 202 L 154 144 L 160 138 L 164 202 L 162 232 L 168 254 L 169 332 L 173 408 C 174 416 186 416 188 408 L 196 322 L 204 256 L 216 256 L 224 322 L 232 408 C 234 416 246 416 247 408 L 251 332 L 252 254 L 258 232 L 256 202 L 260 138 L 266 144 L 276 202 L 287 248 C 292 254 299 251 298 244 L 292 194 L 282 134 C 279 118 272 107 258 104 L 222 96 L 220 81" />
+            </g>
+
+            {/* Internal Anatomical & Skeletal Landmarks (Hairline Vector) */}
+            <g fill="none" stroke="rgba(255,255,255,0.09)" strokeWidth="1">
+              {/* Cerebral Hemispheres & Optic Tracts */}
+              <ellipse cx="202" cy="46" rx="9" ry="12" />
+              <ellipse cx="218" cy="46" rx="9" ry="12" />
+              <path d="M 203 55 L 210 62 L 217 55" />
+              {/* Clavicles & Sternum */}
+              <path d="M 164 108 Q 186 102 210 108 Q 234 102 256 108" />
+              <line x1="210" y1="108" x2="210" y2="162" />
+              {/* Ribcage Contours */}
+              <path d="M 176 120 Q 210 116 244 120" />
+              <path d="M 172 132 Q 210 128 248 132" />
+              <path d="M 172 144 Q 210 140 248 144" />
+              <path d="M 175 156 Q 210 152 245 156" />
+              <path d="M 179 168 Q 210 176 241 168" />
+              {/* Bilateral Lungs */}
+              <path d="M 204 118 C 186 118 176 138 178 164 C 188 164 198 160 204 152 Z" />
+              <path d="M 216 118 C 234 118 244 138 242 164 C 232 164 222 160 216 152 Z" />
+              {/* Heart Contour */}
+              <path d="M 212 142 C 218 138 228 143 226 156 C 224 164 214 168 209 160 C 206 152 208 145 212 142 Z" />
+              {/* Hepatic / Liver Contour */}
+              <path d="M 178 180 C 190 176 206 178 208 186 C 198 194 182 198 177 190 Z" />
+              {/* Retroperitoneal Kidneys */}
+              <ellipse cx="192" cy="212" rx="6.5" ry="10" />
+              <ellipse cx="228" cy="212" rx="6.5" ry="10" />
+              {/* Lumbar Spine & Pelvis / Femur Axes */}
+              <line x1="210" y1="168" x2="210" y2="246" strokeDasharray="3 3" />
+              <path d="M 172 228 Q 210 250 248 228" />
+              <line x1="184" y1="256" x2="180" y2="395" strokeDasharray="3 4" />
+              <line x1="236" y1="256" x2="240" y2="395" strokeDasharray="3 4" />
+            </g>
+
+            {/* Active Domino Cascade Bezier Conduits */}
+            {cascades.map((cascade, index) => {
+              const pathD = buildCascadeCurvePath(
+                cascade.fromSystem,
+                cascade.toSystem,
+                index
+              );
+              const isRed = cascade.severity === "red";
+              const strokeColor = isRed ? "#f87171" : "#fbbf24";
+              return (
+                <g key={cascade.id}>
+                  <path
+                    d={pathD}
+                    fill="none"
+                    stroke={strokeColor}
+                    strokeOpacity="0.22"
+                    strokeWidth="5"
+                  />
+                  <path
+                    d={pathD}
+                    fill="none"
+                    stroke={strokeColor}
+                    strokeWidth="2"
+                    strokeDasharray="5 4"
+                    markerEnd={isRed ? "url(#arrow-red)" : "url(#arrow-amber)"}
+                  >
+                    <animate
+                      attributeName="stroke-dashoffset"
+                      from="18"
+                      to="0"
+                      dur="1s"
+                      repeatCount="indefinite"
+                    />
+                  </path>
+                </g>
+              );
+            })}
+
+            {/* 6 Interactive Organ Nodes + Leader Callouts */}
+            {SYSTEM_ORDER.map((systemId) => {
+              const meta = BODY_SYSTEM_METADATA[systemId];
+              const assessment = assessments[systemId];
+              const style = STATUS_STYLE[assessment.status];
+              const node = BLUEPRINT_NODES[systemId];
+              const isSelected = selectedSystem === systemId;
+              const isLeft = node.side === "left";
+              const pillX = isLeft ? 8 : 298;
+              const pillW = 114;
+              const lineEndX = isLeft ? pillX + pillW : pillX;
+              const shortTitle = meta.shortLabel.split(" / ")[0].toUpperCase();
+
+              return (
+                <g
+                  key={systemId}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${meta.name}: ${style.label}`}
+                  aria-pressed={isSelected}
+                  onClick={() => onSelectSystem(systemId)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelectSystem(systemId);
+                    }
+                  }}
+                  className="cursor-pointer focus:outline-none"
+                >
+                  {/* Leader Hairline */}
+                  <polyline
+                    points={`${node.cx},${node.cy} ${
+                      isLeft ? node.cx - 26 : node.cx + 26
+                    },${node.labelY + 11} ${lineEndX},${node.labelY + 11}`}
+                    fill="none"
+                    stroke={
+                      isSelected
+                        ? "rgba(255,255,255,0.65)"
+                        : "rgba(255,255,255,0.18)"
+                    }
+                    strokeWidth={isSelected ? "1.25" : "0.9"}
+                  />
+
+                  {/* Pulsing Alert Ring */}
+                  {assessment.status === "red" && (
+                    <circle
+                      cx={node.cx}
+                      cy={node.cy}
+                      r="14"
+                      fill="none"
+                      stroke="#f87171"
+                      strokeWidth="1.5"
+                    >
+                      <animate
+                        attributeName="r"
+                        values="9;20;9"
+                        dur="1.6s"
+                        repeatCount="indefinite"
+                      />
+                      <animate
+                        attributeName="opacity"
+                        values="0.85;0.1;0.85"
+                        dur="1.6s"
+                        repeatCount="indefinite"
+                      />
+                    </circle>
+                  )}
+
+                  {/* Selected White Ring */}
+                  {isSelected && (
+                    <circle
+                      cx={node.cx}
+                      cy={node.cy}
+                      r="13"
+                      fill="none"
+                      stroke="#ffffff"
+                      strokeWidth="1.6"
+                    />
+                  )}
+
+                  {/* Organ Node Dot */}
+                  <circle
+                    cx={node.cx}
+                    cy={node.cy}
+                    r="6.5"
+                    fill={style.color}
+                    stroke="#0a0a0a"
+                    strokeWidth="2"
+                    filter="url(#node-glow)"
+                  />
+
+                  {/* Monospace Callout Tag */}
+                  <rect
+                    x={pillX}
+                    y={node.labelY}
+                    width={pillW}
+                    height="22"
+                    rx="11"
+                    fill={isSelected ? "#ffffff" : "#141414"}
+                    stroke={
+                      isSelected ? "#ffffff" : "rgba(255,255,255,0.12)"
+                    }
+                    strokeWidth="1"
+                  />
+                  <circle
+                    cx={pillX + 11}
+                    cy={node.labelY + 11}
+                    r="3"
+                    fill={style.color}
+                  />
+                  <text
+                    x={pillX + 19}
+                    y={node.labelY + 14.5}
+                    fill={isSelected ? "#0a0a0a" : "#ffffff"}
+                    fontSize="9.5"
+                    fontWeight="600"
+                    fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+                  >
+                    {shortTitle}
+                  </text>
+                  <text
+                    x={pillX + pillW - 9}
+                    y={node.labelY + 14.5}
+                    textAnchor="end"
+                    fill={isSelected ? "#0a0a0a" : "#7e828a"}
+                    fontSize="9.5"
+                    fontWeight="600"
+                    fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+                  >
+                    {assessment.score}
+                  </text>
+
+                  <title>{`${meta.name} — ${assessment.headline}`}</title>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
         )}
+
+        {/* Viewport Bottom Legend */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-3 text-[11px] text-[#7e828a]">
+          <span>
+            {viewMode === "3d"
+              ? "Drag to orbit · Scroll to zoom · Click 3D organ to inspect"
+              : "Click any anatomical node or sidebar tile to inspect"}
+          </span>
+          <div className="flex items-center gap-3 font-mono">
+            <span className="inline-flex items-center gap-1.5 text-white">
+              <span className="h-2 w-2 rounded-full bg-emerald-400" />
+              OK
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-white">
+              <span className="h-2 w-2 rounded-full bg-amber-400" />
+              Caution
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-white">
+              <span className="h-2 w-2 rounded-full bg-rose-400" />
+              Alert
+            </span>
+          </div>
+        </div>
       </div>
     </section>
   );
