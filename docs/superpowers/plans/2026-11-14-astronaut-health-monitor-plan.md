@@ -80,7 +80,7 @@
   - `evaluateCrewHealth(vitals: VitalReadings, envTelemetry: EnvironmentTelemetry, envId: MissionEnvironmentId): HealthEvaluationResult`
   - `formatFlightSurgeonPacket(evaluation: HealthEvaluationResult, vitals: VitalReadings, envTelemetry: EnvironmentTelemetry, envId: MissionEnvironmentId): string`
 
-- [ ] **Step 1: Write failing unit tests in `src/lib/__tests__/triageEngine.test.ts`**
+- [x] **Step 1: Write failing unit tests in `src/lib/__tests__/triageEngine.test.ts`**
   Test cases to assert:
   1. `nominal` scenario in `iss_orbit` yields all 6 systems `green`, `activeCascades.length === 0`, and `readinessScore >= 85`.
   2. `sans_co2_fluid_shift` scenario (`iss_orbit`, BP `138/88`, Cabin $\text{CO}_2$ `4.2 mmHg`, ocular `blurry_near`) triggers `gravity_fluid_sans` cascade (`cardiovascular` -> `neuro_ocular`) and elevates `neuro_ocular` to `red`.
@@ -89,13 +89,13 @@
   5. `stress_glucose_metabolic` triggers when Sleep `5.5 hrs`, Mood `3`, and Blood Glucose `128 mg/dL`.
   6. Clamping & edge cases: `NaN` or negative inputs (e.g., `heartRate: -20`, `bloodGlucoseMgDl: NaN`, `sleepHours: 99`) are clamped safely and never return `NaN` in `readinessScore` or `clampedVitals`.
   7. Environment sensitivity: identical borderline readings (`hydrationMl: 2050`, `dailyRadiationMsv: 1.3`) produce higher risk / `autonomousTriageRequired: true` under `mars_transit` (14m 20s comm delay, `0g`) compared to `iss_orbit`.
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
   Run: `npx vitest run src/lib/__tests__/triageEngine.test.ts` -> Expected: FAIL (module not found).
-- [ ] **Step 3: Implement `clampVitalReadings`, `evaluateCrewHealth`, and `formatFlightSurgeonPacket` in `src/lib/triageEngine.ts`**
+- [x] **Step 3: Implement `clampVitalReadings`, `evaluateCrewHealth`, and `formatFlightSurgeonPacket` in `src/lib/triageEngine.ts`**
   Implement deterministic Space-Medicine scoring using Earth-vs-Space baseline comparisons, all 4 cascade rules, readiness score deductions (`-18` per `red`, `-7` per `amber`, `-5` per active cascade, clamped `0–100`), and Flight Surgeon escalation logic factoring in environment communication delay.
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
   Run: `npx vitest run src/lib/__tests__/triageEngine.test.ts` -> Expected: PASS (all 7 tests green).
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   ```bash
   git add src/lib/triageEngine.ts src/lib/__tests__/triageEngine.test.ts
   git commit -m "feat: add Space-Medicine triage and multi-organ cascade engine with tests"
