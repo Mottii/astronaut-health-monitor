@@ -100,26 +100,26 @@ const SYSTEM_BASE_HEX: Record<BodySystemId, string> = {
 };
 
 const TISSUE_COLOR_HEX: Record<string, string> = {
-  Myocardium: "#9e4f5f",
-  Valve: "#cbd5e1",
-  Artery: "#a6545a",
-  Vein: "#5278a6",
-  Parenchyma: "#836ea6",
-  Airway: "#94a3b8",
-  Lymphoid: "#7c65a3",
-  Cortex: "#588eb0",
-  Ventricle: "#4d94a6",
-  Neural: "#5e82ad",
-  Ocular: "#4b9692",
-  Endocrine: "#747eb8",
-  Hepatic: "#96704c",
-  Ligament: "#a89259",
-  Gland: "#9e7c49",
-  GI: "#8f6c50",
-  RenalCortex: "#528c74",
-  RenalMedulla: "#9c5664",
-  Urinary: "#4d856f",
-  Bone: "#94a3b8",
+  Myocardium: "#c4455b",   // deep ruby myocardium
+  Valve: "#cbd5e1",        // pearlescent valve leaflets
+  Artery: "#cf5353",       // oxygenated arterial crimson
+  Vein: "#3b76b8",         // deoxygenated venous cobalt
+  Parenchyma: "#7c88c4",   // soft indigo-lavender lung parenchyma
+  Airway: "#94a3b8",       // cool slate trachea/bronchi
+  Lymphoid: "#9b6bc2",     // violet spleen & lymph nodes
+  Cortex: "#3ea6c2",       // crisp cyan cerebral cortex
+  Ventricle: "#38bdf8",    // bright aqua CSF ventricles
+  Neural: "#5e82ad",       // steel-blue spinal cord
+  Ocular: "#2dd4bf",       // teal optic chiasm & globes
+  Endocrine: "#818cf8",    // periwinkle pineal/pituitary
+  Hepatic: "#a85143",      // warm terracotta liver
+  Ligament: "#b59b5c",     // muted ochre ligaments
+  Gland: "#d49a45",        // amber-gold pancreas/adrenals
+  GI: "#c9864c",           // warm bronze stomach & colon
+  RenalCortex: "#2ea885",  // emerald-teal renal cortex
+  RenalMedulla: "#b85c72", // rose-plum renal pyramids
+  Urinary: "#3c9984",      // sea-green ureters & bladder
+  Bone: "#94a3b8",         // unified X-ray slate bone
 };
 
 const DEFAULT_STRUCTURE_BY_SYSTEM: Record<BodySystemId, HoveredStructureInfo> = {
@@ -547,6 +547,8 @@ export function BioTwin3DStage({
   enableParallaxRef.current = enableParallax;
   const calloutFilterRef = useRef(calloutFilter);
   calloutFilterRef.current = calloutFilter;
+  const cameraPresetRef = useRef(cameraPreset);
+  cameraPresetRef.current = cameraPreset;
 
   useEffect(() => {
     setClickedInfo((prev) =>
@@ -1490,29 +1492,37 @@ export function BioTwin3DStage({
           if (assessment.status === "green") {
             targetColor.copy(entry.baseColor);
           } else {
+            // Keep each organ's distinct anatomical color; blend only a subtle status tint
             const alertBlend = isShell
-              ? 0.62
+              ? 0.18
               : preserveAnatomicalHue
-                ? 0.14
-                : 0.42;
+                ? 0.08
+                : 0.14;
             targetColor.copy(entry.baseColor).lerp(statusColorObj, alertBlend);
           }
           entry.material.color.lerp(targetColor, 0.14);
           entry.material.emissive.lerp(targetColor, 0.14);
 
+          const isOverview = cameraPresetRef.current === "full";
           let targetOpacity = isSelected
             ? isShell
-              ? 0.52
-              : 0.72
-            : isShell
-              ? 0.32
-              : entry.meta.tissueTag === "Artery" || entry.meta.tissueTag === "Vein"
-                ? 0.48
-                : 0.44;
+              ? 0.56
+              : 0.78
+            : isOverview
+              ? isShell
+                ? 0.36
+                : entry.meta.tissueTag === "Artery" || entry.meta.tissueTag === "Vein"
+                  ? 0.54
+                  : 0.52
+              : isShell
+                ? 0.15
+                : entry.meta.tissueTag === "Artery" || entry.meta.tissueTag === "Vein"
+                  ? 0.28
+                  : 0.22;
           if (effectiveMode === "xray") {
-            targetOpacity = isShell ? 0.18 : isSelected ? 0.76 : 0.50;
+            targetOpacity = isShell ? 0.18 : isSelected ? 0.80 : isOverview ? 0.52 : 0.26;
           } else if (effectiveMode === "vascular") {
-            targetOpacity = isVascularTissue ? (isShell ? 0.32 : 0.78) : 0.06;
+            targetOpacity = isVascularTissue ? (isShell ? 0.32 : 0.80) : 0.06;
           }
           entry.material.opacity += (targetOpacity - entry.material.opacity) * 0.16;
           entry.material.depthWrite = false;
