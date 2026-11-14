@@ -1,6 +1,7 @@
 import type {
   BodySystemId,
   BodySystemMetadata,
+  CountermeasureActionSpec,
   EarthVsSpaceRange,
   HazardId,
   MissionEnvironmentConfig,
@@ -735,4 +736,193 @@ export const BASE_14_SOL_HISTORY: Record<MissionEnvironmentId, SolTelemetryPoint
     saaDoseMsv: 0.12,
     totalRadiationMsv: Number((pt.gcrDoseMsv + 0.3 + 0.12).toFixed(2)),
   })),
+};
+
+export const EXECUTABLE_COUNTERMEASURES: Record<
+  BodySystemId,
+  CountermeasureActionSpec[]
+> = {
+  neuro_ocular: [
+    {
+      id: "neuro_lbnp_cuffs",
+      systemId: "neuro_ocular",
+      label: "Engage LBNP Chibis / Venous Thigh Cuffs (30 min)",
+      protocolCode: "CMO-SANS-01",
+      hardwareTarget: "LBNP Chibis / Thigh Cuffs",
+      deltaSummary: "Draws ~2L cephalad fluid downward · BP -> 120/78 · Acuity stabilized",
+      vitalsPatch: {
+        bloodPressureSystolic: 120,
+        bloodPressureDiastolic: 78,
+        ocularFinding: "clear",
+      },
+      routineTaskId: "amsler_ocular",
+    },
+    {
+      id: "neuro_cdra_scrub",
+      systemId: "neuro_ocular",
+      label: "Switch CDRA CO2 Scrubber to High-Flow Override",
+      protocolCode: "ECLSS-CDRA-02",
+      hardwareTarget: "CDRA Dual-Bed CO2 Scrubber",
+      deltaSummary: "Cabin pCO2 -> 2.4 mmHg (relieves cerebral vasodilation)",
+      envPatch: {
+        cabinCo2MmHg: 2.4,
+      },
+    },
+    {
+      id: "neuro_anticipation_glasses",
+      systemId: "neuro_ocular",
+      label: "Apply Space Anticipation Glasses & Fundoscopy Check",
+      protocolCode: "OPT-SANS-03",
+      hardwareTarget: "Crew Optical Kit + Fundoscope",
+      deltaSummary: "Refractive shift corrected · Near acuity cleared",
+      vitalsPatch: {
+        ocularFinding: "clear",
+      },
+      routineTaskId: "amsler_ocular",
+    },
+  ],
+  cardiovascular: [
+    {
+      id: "cv_saline_lbnp",
+      systemId: "cardiovascular",
+      label: "Administer Isotonic Saline + LBNP Baroreceptor Reload",
+      protocolCode: "CV-ORTHO-01",
+      hardwareTarget: "Galley Saline + LBNP Chamber",
+      deltaSummary: "HR -> 68 bpm · BP -> 118/76 mmHg · Plasma volume restored",
+      vitalsPatch: {
+        heartRateBpm: 68,
+        bloodPressureSystolic: 118,
+        bloodPressureDiastolic: 76,
+        hydrationMl: 2550,
+      },
+      routineTaskId: "renal_hydration",
+    },
+    {
+      id: "cv_cevis_interval",
+      systemId: "cardiovascular",
+      label: "Complete 25-Min CEVIS Aerobic Vagal Interval",
+      protocolCode: "EX-CEVIS-02",
+      hardwareTarget: "CEVIS Cycle Ergometer",
+      deltaSummary: "Resting HR -> 66 bpm · BP -> 118/76 mmHg",
+      vitalsPatch: {
+        heartRateBpm: 66,
+        bloodPressureSystolic: 118,
+        bloodPressureDiastolic: 76,
+      },
+    },
+  ],
+  musculoskeletal_renal: [
+    {
+      id: "renal_potassium_citrate",
+      systemId: "musculoskeletal_renal",
+      label: "Administer Potassium Citrate 20 mEq + 650 mL Bolus",
+      protocolCode: "RENAL-KCA-01",
+      hardwareTarget: "PWD Dispenser + CMO Med Kit",
+      deltaSummary: "Hydration -> 2,550 mL/day · Dilutes mobilized bone Ca2+",
+      vitalsPatch: {
+        hydrationMl: 2550,
+      },
+      routineTaskId: "renal_hydration",
+    },
+    {
+      id: "msk_ared_session",
+      systemId: "musculoskeletal_renal",
+      label: "Execute Daily ARED Axial Resistance Loading",
+      protocolCode: "EX-ARED-02",
+      hardwareTarget: "ARED Vacuum Cylinder Rack",
+      deltaSummary: "ARED -> DONE · Counters 1–1.5%/mo trabecular bone resorption",
+      vitalsPatch: {
+        aredExerciseCompleted: true,
+      },
+      routineTaskId: "ared_load",
+    },
+  ],
+  metabolic_endocrine: [
+    {
+      id: "met_low_gi_hydration",
+      systemId: "metabolic_endocrine",
+      label: "Deploy Low-GI Space Ration + 400 mL Electrolyte Bolus",
+      protocolCode: "MET-GLU-01",
+      hardwareTarget: "Galley Food Warmer + PWD",
+      deltaSummary: "Glucose -> 92 mg/dL · Hydration -> 2,450 mL/day",
+      vitalsPatch: {
+        bloodGlucoseMgDl: 92,
+        hydrationMl: 2450,
+      },
+    },
+    {
+      id: "met_lcvg_cooling",
+      systemId: "metabolic_endocrine",
+      label: "Engage LCVG Cooling & Habitat Airflow Venting",
+      protocolCode: "THM-LCVG-02",
+      hardwareTarget: "LCVG Cooling Loop + IMV Fan",
+      deltaSummary: "Core Temp -> 36.8 °C · Cabin Temp -> 21.8 °C",
+      vitalsPatch: {
+        bodyTempC: 36.8,
+      },
+      envPatch: {
+        cabinTempC: 21.8,
+      },
+    },
+  ],
+  immune_hematology: [
+    {
+      id: "imm_storm_shelter",
+      systemId: "immune_hematology",
+      label: "Relocate Crew to Water-Wall SPE Storm Shelter",
+      protocolCode: "RAD-SPE-01",
+      hardwareTarget: "Polyethylene / Water-Wall Shelter",
+      deltaSummary: "Daily Rad -> 0.55 mSv · SPE -> 0.15 mSv · Flare Exposure Cleared",
+      envPatch: {
+        dailyRadiationMsv: 0.55,
+        gcrDoseMsv: 0.4,
+        saaOrSpeDoseMsv: 0.15,
+        solarFlareClass: "None",
+      },
+      routineTaskId: "radlab_sync",
+    },
+    {
+      id: "imm_antioxidant_recovery",
+      systemId: "immune_hematology",
+      label: "Administer Radioprotective Antioxidant + Recovery Block",
+      protocolCode: "IMM-REC-02",
+      hardwareTarget: "CMO Pharmacy Pack + Sleep Berth",
+      deltaSummary: "Core Temp -> 36.9 °C · HR -> 72 bpm · Sleep -> 7.4 hrs",
+      vitalsPatch: {
+        bodyTempC: 36.9,
+        heartRateBpm: 72,
+        sleepHours: 7.4,
+      },
+    },
+  ],
+  behavioral_circadian: [
+    {
+      id: "beh_ssla_co2_scrub",
+      systemId: "behavioral_circadian",
+      label: "Trigger 480nm Blue SSLA Wake Array + CDRA CO2 Scrub",
+      protocolCode: "CIRC-SSLA-01",
+      hardwareTarget: "SSLA Lighting + CDRA Scrubber",
+      deltaSummary: "Mood -> 8/10 · Cabin pCO2 -> 2.5 mmHg · Phase aligned",
+      vitalsPatch: {
+        moodScore: 8,
+      },
+      envPatch: {
+        cabinCo2MmHg: 2.5,
+      },
+      routineTaskId: "circadian_ssla",
+    },
+    {
+      id: "beh_protected_sleep",
+      systemId: "behavioral_circadian",
+      label: "Initiate Protected 8h Acoustic Berth & Amber Shift",
+      protocolCode: "BEH-REST-02",
+      hardwareTarget: "Crew Quarters + Acoustic Shield",
+      deltaSummary: "Sleep -> 7.6 hrs · Mood -> 8/10 · Cortisol/Glucose stabilized",
+      vitalsPatch: {
+        sleepHours: 7.6,
+        moodScore: 8,
+        bloodGlucoseMgDl: 94,
+      },
+    },
+  ],
 };

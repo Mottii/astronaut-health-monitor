@@ -2,7 +2,9 @@ import { BODY_SYSTEM_METADATA, MISSION_ENVIRONMENTS } from "@/data/nasaHrpData";
 import type {
   BodySystemId,
   CascadeLink,
+  CountermeasureActionSpec,
   EnvironmentTelemetry,
+  FlightSurgeonPacketContext,
   HealthEvaluationResult,
   MissionEnvironmentConfig,
   MissionEnvironmentId,
@@ -650,6 +652,30 @@ export function evaluateCrewHealth(
 }
 
 /**
+ * Applies a hardware-mapped countermeasure protocol to crew vitals and habitat telemetry
+ * with physiological clamping, enabling closed-loop autonomous BioTwin recovery.
+ */
+export function applyCountermeasureToState(
+  vitals: VitalReadings,
+  envTelemetry: EnvironmentTelemetry,
+  action: CountermeasureActionSpec
+): { vitals: VitalReadings; envTelemetry: EnvironmentTelemetry } {
+  const nextVitals = clampVitalReadings({
+    ...vitals,
+    ...(action.vitalsPatch ?? {}),
+  });
+  const nextEnv = clampEnvTelemetry({
+    ...envTelemetry,
+    ...(action.envPatch ?? {}),
+  });
+
+  return {
+    vitals: nextVitals,
+    envTelemetry: nextEnv,
+  };
+}
+
+/**
  * Generates an asynchronous telemetry packet formatted for Ground Flight Surgeons
  * or autonomous crew medical logs when operating under deep-space communication delay.
  */
@@ -657,7 +683,8 @@ export function formatFlightSurgeonPacket(
   evaluation: HealthEvaluationResult,
   vitals: VitalReadings,
   envTelemetry: EnvironmentTelemetry,
-  envId: MissionEnvironmentId
+  envId: MissionEnvironmentId,
+  clinicalContext?: FlightSurgeonPacketContext
 ): string {
   const env = MISSION_ENVIRONMENTS[envId];
   const v = clampVitalReadings(vitals);
@@ -674,7 +701,7 @@ export function formatFlightSurgeonPacket(
     (c) => `- [${c.severity.toUpperCase()}] ${c.title} -> Action: ${c.immediateAction}`
   );
 
-  return [
+  const baseLines = [
     `=== ARES-MED OS :: MEDICAL TELEMETRY PACKET ===`,
     `Environment: ${env.name} (${env.gravityLabel})`,
     `Comm Delay: ${env.commDelayLabel} | Mode: ${
@@ -702,5 +729,49 @@ export function formatFlightSurgeonPacket(
     ``,
     `[ACTIVE DOMINO CASCADES]`,
     ...(cascadeLines.length > 0 ? cascadeLines : ["- No active multi-organ cascades."]),
-  ].join("\n");
+  ];
+
+  if (!clinicalContext) {
+    return baseLines.join("\n");
+  }
+
+  const extraLines: string[] = [];
+
+  if (clinicalContext.subStructure) {
+    extraLines.push(
+      ``,
+      `[PINNED 3D ANATOMICAL FOCUS]`,
+      `- ${clinicalContext.subStructure.displayLabel} (${clinicalContext.subStructure.layer} · ${clinicalContext.subStructure.tissueTag})`
+    );
+  }
+
+  const examEntries = Object.entries(clinicalContext.examFindings ?? {}).filter(
+    ([, finding]) => finding.status !== "pending"
+  );
+  extraLines.push(``, `[CMO GUIDED SELF-EXAM LOG]`);
+  if (examEntries.length > 0) {
+    for (const [key, finding] of examEntries) {
+      const valueText = finding.measuredValue ? ` [${finding.measuredValue}]` : "";
+      const noteText = finding.note ? ` — ${finding.note}` : "";
+      extraLines.push(
+        `- ${key}: ${finding.status.toUpperCase()}${valueText}${noteText}`
+      );
+    }
+  } else {
+    extraLines.push(`- No verified self-exam steps logged yet.`);
+  }
+
+  const executed = clinicalContext.executedActions ?? [];
+  extraLines.push(``, `[EXECUTED COUNTERMEASURES]`);
+  if (executed.length > 0) {
+    for (const act of executed) {
+      extraLines.push(
+        `- [${act.timestamp}] ${act.label} (${act.deltaSummary})`
+      );
+    }
+  } else {
+    extraLines.push(`- None executed during this triage window.`);
+  }
+
+  return [...baseLines, ...extraLines].join("\n");
 }

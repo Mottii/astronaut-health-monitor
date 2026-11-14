@@ -195,3 +195,47 @@ export interface RoutineProgressState {
   streakSols: number;
   lastUpdatedIso: string;
 }
+
+export type CmoWorkflowStage = "overview" | "exam" | "intervene" | "downlink";
+
+export interface SelectedSubStructure {
+  systemId: BodySystemId;
+  nodeName: string;
+  displayLabel: string;
+  layer: string;
+  tissueTag: string;
+}
+
+export interface ExamStepFinding {
+  status: "pending" | "normal" | "escalated";
+  note?: string;
+  measuredValue?: string;
+  updatedAt?: string;
+}
+
+export interface CountermeasureActionSpec {
+  id: string;
+  systemId: BodySystemId;
+  label: string;
+  protocolCode: string;
+  hardwareTarget: string;
+  deltaSummary: string;
+  vitalsPatch?: Partial<VitalReadings>;
+  envPatch?: Partial<EnvironmentTelemetry>;
+  routineTaskId?: string;
+}
+
+export interface ExecutedActionLog {
+  id: string;
+  actionId: string;
+  systemId: BodySystemId;
+  label: string;
+  deltaSummary: string;
+  timestamp: string;
+}
+
+export interface FlightSurgeonPacketContext {
+  examFindings?: Record<string, ExamStepFinding>;
+  executedActions?: ExecutedActionLog[];
+  subStructure?: SelectedSubStructure | null;
+}

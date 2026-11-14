@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { DEMO_SCENARIOS, MISSION_ENVIRONMENTS } from "@/data/nasaHrpData";
 import {
+  DEMO_SCENARIOS,
+  EXECUTABLE_COUNTERMEASURES,
+  MISSION_ENVIRONMENTS,
+} from "@/data/nasaHrpData";
+import {
+  applyCountermeasureToState,
   clampVitalReadings,
   evaluateCrewHealth,
   formatFlightSurgeonPacket,
@@ -184,5 +189,123 @@ describe("triageEngine", () => {
     expect(packet).toContain("Deep-Space Mars Transit");
     expect(packet).toContain("14m 20s");
     expect(packet).toContain("AUTONOMOUS CMO");
+  });
+
+  it("recovers neuro_ocular, musculoskeletal_renal, and immune_hematology via closed-loop countermeasures", () => {
+    const sans = getScenario("sans_co2_fluid_shift");
+    const initialSans = evaluateCrewHealth(
+      sans.vitals,
+      sans.envTelemetry,
+      sans.environmentId
+    );
+    expect(initialSans.systems.neuro_ocular.status).toBe("red");
+
+    let state = { vitals: sans.vitals, envTelemetry: sans.envTelemetry };
+    for (const action of EXECUTABLE_COUNTERMEASURES.neuro_ocular) {
+      state = applyCountermeasureToState(state.vitals, state.envTelemetry, action);
+    }
+    const recoveredSans = evaluateCrewHealth(
+      state.vitals,
+      state.envTelemetry,
+      sans.environmentId
+    );
+    expect(recoveredSans.systems.neuro_ocular.status).toBe("green");
+    expect(recoveredSans.readinessScore).toBeGreaterThan(
+      initialSans.readinessScore
+    );
+
+    const renal = getScenario("renal_dehydration");
+    const initialRenal = evaluateCrewHealth(
+      renal.vitals,
+      renal.envTelemetry,
+      renal.environmentId
+    );
+    expect(initialRenal.systems.musculoskeletal_renal.status).toBe("red");
+
+    let renalState = { vitals: renal.vitals, envTelemetry: renal.envTelemetry };
+    for (const action of EXECUTABLE_COUNTERMEASURES.musculoskeletal_renal) {
+      renalState = applyCountermeasureToState(
+        renalState.vitals,
+        renalState.envTelemetry,
+        action
+      );
+    }
+    const recoveredRenal = evaluateCrewHealth(
+      renalState.vitals,
+      renalState.envTelemetry,
+      renal.environmentId
+    );
+    expect(recoveredRenal.systems.musculoskeletal_renal.status).toBe("green");
+
+    const storm = getScenario("solar_storm");
+    const initialStorm = evaluateCrewHealth(
+      storm.vitals,
+      storm.envTelemetry,
+      storm.environmentId
+    );
+    expect(initialStorm.systems.immune_hematology.status).toBe("red");
+
+    let stormState = { vitals: storm.vitals, envTelemetry: storm.envTelemetry };
+    for (const action of EXECUTABLE_COUNTERMEASURES.immune_hematology) {
+      stormState = applyCountermeasureToState(
+        stormState.vitals,
+        stormState.envTelemetry,
+        action
+      );
+    }
+    const recoveredStorm = evaluateCrewHealth(
+      stormState.vitals,
+      stormState.envTelemetry,
+      storm.environmentId
+    );
+    expect(recoveredStorm.systems.immune_hematology.status).toBe("green");
+  });
+
+  it("appends verified self-exam findings, sub-structure focus, and executed countermeasures to DTN packet when context provided", () => {
+    const sans = getScenario("sans_co2_fluid_shift");
+    const evalResult = evaluateCrewHealth(
+      sans.vitals,
+      sans.envTelemetry,
+      "mars_transit"
+    );
+    const packet = formatFlightSurgeonPacket(
+      evalResult,
+      sans.vitals,
+      sans.envTelemetry,
+      "mars_transit",
+      {
+        subStructure: {
+          systemId: "neuro_ocular",
+          nodeName: "Organ_neuro_ocular__Core__Neural_Parenchyma__Eye_Left",
+          displayLabel: "Eye Left",
+          layer: "Core",
+          tissueTag: "Neural Parenchyma",
+        },
+        examFindings: {
+          "neuro_ocular-2": {
+            status: "escalated",
+            measuredValue: "5.9 mm",
+            note: "Distended ONSD (> 5.5 mm)",
+          },
+        },
+        executedActions: [
+          {
+            id: "log-1",
+            actionId: "neuro_lbnp_cuffs",
+            systemId: "neuro_ocular",
+            label: "Engage LBNP Chibis / Venous Thigh Cuffs (30 min)",
+            deltaSummary: "BP -> 120/78",
+            timestamp: "14:15 UTC",
+          },
+        ],
+      }
+    );
+
+    expect(packet).toContain("[PINNED 3D ANATOMICAL FOCUS]");
+    expect(packet).toContain("Eye Left (Core · Neural Parenchyma)");
+    expect(packet).toContain("[CMO GUIDED SELF-EXAM LOG]");
+    expect(packet).toContain("ESCALATED [5.9 mm]");
+    expect(packet).toContain("[EXECUTED COUNTERMEASURES]");
+    expect(packet).toContain("Engage LBNP Chibis / Venous Thigh Cuffs");
   });
 });

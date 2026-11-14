@@ -9,6 +9,7 @@ import type {
   BodySystemId,
   CascadeLink,
   EnvironmentTelemetry,
+  SelectedSubStructure,
   SystemAssessment,
   TriageStatus,
   VitalReadings,
@@ -21,6 +22,7 @@ export interface BioTwin3DStageProps {
   cascades: CascadeLink[];
   selectedSystem: BodySystemId;
   onSelectSystem: (systemId: BodySystemId) => void;
+  onSelectSubStructure?: (info: SelectedSubStructure) => void;
   vitals?: VitalReadings;
   envTelemetry?: EnvironmentTelemetry;
   visualMode?: ClinicalVisualMode;
@@ -300,6 +302,7 @@ export function BioTwin3DStage({
   cascades,
   selectedSystem,
   onSelectSystem,
+  onSelectSubStructure,
   vitals,
   envTelemetry,
   visualMode,
@@ -351,6 +354,9 @@ export function BioTwin3DStage({
 
   const onSelectRef = useRef(onSelectSystem);
   onSelectRef.current = onSelectSystem;
+
+  const onSelectSubStructureRef = useRef(onSelectSubStructure);
+  onSelectSubStructureRef.current = onSelectSubStructure;
 
   const cascadesRef = useRef<CascadeLink[]>(cascades);
   cascadesRef.current = cascades;
@@ -831,6 +837,13 @@ export function BioTwin3DStage({
           structureLabel: hit.parsed.structureLabel,
         });
         onSelectRef.current(hit.parsed.systemId);
+        onSelectSubStructureRef.current?.({
+          systemId: hit.parsed.systemId,
+          nodeName: hit.mesh.name,
+          displayLabel: hit.parsed.structureLabel,
+          layer: hit.parsed.layer,
+          tissueTag: hit.parsed.tissueTag,
+        });
       }
     };
 
