@@ -737,6 +737,33 @@ export function formatFlightSurgeonPacket(
 
   const extraLines: string[] = [];
 
+  if (
+    clinicalContext.telemetryMode ||
+    clinicalContext.biometricSource ||
+    clinicalContext.issSnapshot
+  ) {
+    extraLines.push(``, `[HARDWARE TELEMETRY PROVENANCE]`);
+    if (clinicalContext.telemetryMode) {
+      extraLines.push(`- Multiplexer Mode: ${clinicalContext.telemetryMode.toUpperCase()}`);
+    }
+    if (clinicalContext.biometricSource) {
+      extraLines.push(`- Biometric Source: ${clinicalContext.biometricSource}`);
+    }
+    if (clinicalContext.issSnapshot) {
+      const snap = clinicalContext.issSnapshot;
+      extraLines.push(
+        `- ISS Orbital State (${snap.source}): Lat ${snap.orbital.latitude}°, Lon ${snap.orbital.longitude}°, Alt ${snap.orbital.altitudeKm} km, SAA Belt: ${snap.orbital.inSouthAtlanticAnomaly ? "ACTIVE" : "CLEAR"}`
+      );
+      const uslabCo2 = snap.symbols.USLAB000058;
+      const node3Wrs = snap.symbols.NODE3000005;
+      if (uslabCo2 && node3Wrs) {
+        extraLines.push(
+          `- ISS ETHOS Symbols: USLAB000058=${uslabCo2.value}${uslabCo2.unit}, NODE3000005=${node3Wrs.value}${node3Wrs.unit}`
+        );
+      }
+    }
+  }
+
   if (clinicalContext.subStructure) {
     extraLines.push(
       ``,

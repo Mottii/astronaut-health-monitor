@@ -7,7 +7,9 @@ import type {
   MissionEnvironmentConfig,
   MissionEnvironmentId,
   MissionScenario,
+  NasaHardwareSpec,
   NasaHazardInfo,
+  OsdrStudyLiveMetadata,
   RoutineTask,
   SolTelemetryPoint,
 } from "@/types/health";
@@ -925,4 +927,159 @@ export const EXECUTABLE_COUNTERMEASURES: Record<
       },
     },
   ],
+};
+
+export const NASA_FLIGHT_HARDWARE_SPECS: NasaHardwareSpec[] = [
+  {
+    id: "csa_astroskin",
+    name: "CSA Bio-Monitor / Astroskin Smart Garment",
+    agency: "CSA",
+    program: "ISS & HERA Analog Biometrics",
+    telemetrySymbolOrProtocol: "BLE GATT 0x180D / 0x2A37 + Xiphos Q7 1Hz Telemetry",
+    mappedMetrics: [
+      "heartRateBpm",
+      "bloodPressureSystolic",
+      "bloodPressureDiastolic",
+      "bodyTempC",
+      "sleepHours",
+    ],
+    clinicalRole:
+      "Continuous 3-lead ECG, Pulse Transit Time (PTT) cuffless blood pressure, forehead PPG SpO2, skin temperature, and 3-axis accelerometer actigraphy.",
+    referenceUrl:
+      "https://www.asc-csa.gc.ca/eng/sciences/bio-monitor.asp",
+  },
+  {
+    id: "iss_uslab_mca_cdra",
+    name: "ISS USLAB Major Constituent Analyzer (MCA) & CDRA",
+    agency: "NASA",
+    program: "ISS ECLSS / ETHOS Console",
+    telemetrySymbolOrProtocol: "Lightstreamer ISSLIVE · USLAB000058 / USLAB000053",
+    mappedMetrics: ["cabinCo2MmHg"],
+    clinicalRole:
+      "Mass-spectrometry cabin ppCO2 monitoring and dual-bed zeolite CO2 scrubbing to prevent hypercapnic cerebral vasodilation and SANS.",
+    referenceUrl: "https://www.nasa.gov/hrp/hazards/",
+  },
+  {
+    id: "iss_thc_node3_wrs",
+    name: "ISS USLAB THC & Node 3 WRS / Urine Processor Assembly",
+    agency: "NASA",
+    program: "ISS ETHOS / ECLSS Node 3",
+    telemetrySymbolOrProtocol:
+      "Lightstreamer ISSLIVE · USLAB000059 / USLAB000060 / NODE3000005",
+    mappedMetrics: ["cabinTempC", "cabinHumidityPct", "hydrationMl"],
+    clinicalRole:
+      "Condensing heat-exchanger thermal/humidity control and closed-loop water recovery supporting crew renal stone prophylaxis (>= 2,400 mL/day).",
+    referenceUrl: "https://www.nasa.gov/hrp/risks/",
+  },
+  {
+    id: "artemis_hera_cad_dostel",
+    name: "Artemis HERA, Crew Active Dosimeter (CAD) & RadLab DosTel",
+    agency: "NASA / CSA",
+    program: "Orion & ISS RadLab Dosimetry",
+    telemetrySymbolOrProtocol:
+      "Timepix Silicon Pixel / Mirion CAD / NASA DONKI API",
+    mappedMetrics: [
+      "dailyRadiationMsv",
+      "gcrDoseMsv",
+      "saaOrSpeDoseMsv",
+      "solarFlareClass",
+    ],
+    clinicalRole:
+      "Minute-by-minute ionizing GCR, South Atlantic Anomaly (SAA) trapped proton, and Solar Particle Event (SPE) absorbed dose tracking.",
+    referenceUrl:
+      "https://visualization.osdr.nasa.gov/radlab/gui/data-overview/",
+  },
+  {
+    id: "exploration_ultrasound_istat",
+    name: "Exploration Medical Kit Ultrasound (Butterfly iQ / Vivid q) & Abbott i-STAT",
+    agency: "NASA",
+    program: "ISS HMTA & Artemis Level IV Kit",
+    telemetrySymbolOrProtocol:
+      "CHP-IDA Point-of-Care Diagnostic Bus (OSD-48 / OSD-104)",
+    mappedMetrics: ["ocularFinding", "bloodGlucoseMgDl"],
+    clinicalRole:
+      "3 mm retrobulbar Optic Nerve Sheath Diameter (ONSD) caliper for SANS and fingerstick blood chemistry for spaceflight insulin resistance.",
+    referenceUrl: "https://osdr.nasa.gov/bio/repo",
+  },
+  {
+    id: "nasa_chp_ida_bus",
+    name: "NASA CHP-IDA (Crew Health & Performance Integrated Data Architecture)",
+    agency: "NASA",
+    program: "Artemis & Mars Autonomous Medical Operations",
+    telemetrySymbolOrProtocol:
+      "REST / WebSocket JSON Telemetry Multiplexer -> PersEIDS/EPIC",
+    mappedMetrics: ["readinessScore", "autonomousTriageRequired"],
+    clinicalRole:
+      "Unifies spacecraft ECLSS, radiation dosimetry, and crew wearables into an offline-capable autonomous triage bus during deep-space comm blackouts.",
+    referenceUrl: "https://www.nasa.gov/hrp/ongoing-hrp-research/",
+  },
+];
+
+export const CURATED_OSDR_STUDIES: Record<string, OsdrStudyLiveMetadata> = {
+  "OSD-48": {
+    studyId: "OSD-48",
+    title:
+      "Rodent Research-1 (RR1) / Spaceflight Musculoskeletal & Neuro-Ocular Adaptation",
+    missionName: "SpaceX-4 / ISS Increment 41",
+    organismOrSubject: "Mus musculus / Spaceflight Fluid & Bone Cohort",
+    assayTypes: ["Micro-CT Bone", "RNA-Seq", "Ocular Structural Telemetry"],
+    sampleCount: 40,
+    source: "curated_osdr_cache",
+    osdrUrl: "https://osdr.nasa.gov/bio/repo/data/studies/OSD-48",
+  },
+  "OSD-104": {
+    studyId: "OSD-104",
+    title:
+      "Spaceflight Muscle Unloading, Hepatic Lipid & Subclinical Insulin Resistance",
+    missionName: "ISS Rodent Research / Metabolic Endocrine Study",
+    organismOrSubject: "Mus musculus / Hepatic & Skeletal Muscle Tissue",
+    assayTypes: ["RNA-Seq", "Metabolomics", "Blood Glucose Chemistry"],
+    sampleCount: 24,
+    source: "curated_osdr_cache",
+    osdrUrl: "https://osdr.nasa.gov/bio/repo/data/studies/OSD-104",
+  },
+  "OSD-255": {
+    studyId: "OSD-255",
+    title:
+      "Neuro-Ocular, Intracranial Fluid Shift & Circadian Transcriptomic Profiling",
+    missionName: "ISS Orbital Spaceflight / SANS Research",
+    organismOrSubject: "Retinal & Optic Nerve Tissue",
+    assayTypes: ["Single-Cell RNA-Seq", "Ocular Ultrasound / Fundoscopy"],
+    sampleCount: 32,
+    source: "curated_osdr_cache",
+    osdrUrl: "https://osdr.nasa.gov/bio/repo/data/studies/OSD-255",
+  },
+  "OSD-530": {
+    studyId: "OSD-530",
+    title:
+      "Space Radiation (GCR/SPE) Hematologic Stress & Immune Cell Profiling",
+    missionName: "ISS / Inspiration4 & RadLab Dosimetry Correlation",
+    organismOrSubject: "Homo sapiens / Peripheral Blood Mononuclear Cells",
+    assayTypes: ["cfDNA", "Proteomics", "RadLab DosTel Telemetry"],
+    sampleCount: 48,
+    source: "curated_osdr_cache",
+    osdrUrl: "https://osdr.nasa.gov/bio/repo/data/studies/OSD-530",
+  },
+  "OSD-135": {
+    studyId: "OSD-135",
+    title:
+      "Microgravity Cardiovascular Remodeling & Vascular Baroreceptor Adaptation",
+    missionName: "ISS Cardiovascular & Flight Surgeon Cohort",
+    organismOrSubject: "Cardiomyocytes & Systemic Vascular Tissue",
+    assayTypes: ["Transcriptomics", "Echocardiography", "Hemodynamics"],
+    sampleCount: 28,
+    source: "curated_osdr_cache",
+    osdrUrl: "https://osdr.nasa.gov/bio/repo/data/studies/OSD-135",
+  },
+  "OSD-37": {
+    studyId: "OSD-37",
+    title:
+      "Altered Gravity Calcium Mobilization & Renal Nephrolithiasis Risk Biomarkers",
+    missionName: "ISS Renal Stone Prophylaxis & Bone Loss Study",
+    organismOrSubject: "Renal Tubule & Trabecular Bone Cohort",
+    assayTypes: ["Urinary Supersaturation", "Proteomics", "Bone Resorption"],
+    sampleCount: 30,
+    source: "curated_osdr_cache",
+    osdrUrl: "https://osdr.nasa.gov/bio/repo/data/studies/OSD-37",
+  },
 };

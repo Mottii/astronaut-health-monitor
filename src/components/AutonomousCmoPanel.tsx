@@ -29,6 +29,7 @@ import {
 } from "@/data/nasaHrpData";
 import { formatFlightSurgeonPacket } from "@/lib/triageEngine";
 import type {
+  BiometricSourceType,
   BodySystemId,
   CmoWorkflowStage,
   CountermeasureActionSpec,
@@ -36,9 +37,11 @@ import type {
   ExamStepFinding,
   ExecutedActionLog,
   HealthEvaluationResult,
+  IssLiveTelemetrySnapshot,
   MissionEnvironmentId,
   OcularFinding,
   SelectedSubStructure,
+  TelemetryMode,
   TriageStatus,
   VitalReadings,
 } from "@/types/health";
@@ -60,6 +63,9 @@ export interface AutonomousCmoPanelProps {
     finding: ExamStepFinding
   ) => void;
   onResetSystemExam?: (systemId: BodySystemId) => void;
+  telemetryMode?: TelemetryMode;
+  biometricSource?: BiometricSourceType;
+  issSnapshot?: IssLiveTelemetrySnapshot | null;
 }
 
 const STATUS_BADGE_MAP: Record<
@@ -285,6 +291,9 @@ export function AutonomousCmoPanel({
   examFindings: externalExamFindings,
   onUpdateExamFinding,
   onResetSystemExam,
+  telemetryMode,
+  biometricSource,
+  issSnapshot,
 }: AutonomousCmoPanelProps) {
   const [stage, setStage] = useState<CmoWorkflowStage>("overview");
   const [activeStepIdx, setActiveStepIdx] = useState<number>(0);
@@ -362,6 +371,9 @@ export function AutonomousCmoPanel({
       subStructure: pinnedSub,
       examFindings,
       executedActions,
+      telemetryMode,
+      biometricSource,
+      issSnapshot,
     }
   );
 

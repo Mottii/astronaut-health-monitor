@@ -19,6 +19,7 @@ import type {
   EnvironmentTelemetry,
   SelectedSubStructure,
   SystemAssessment,
+  TelemetryMode,
   TriageStatus,
   VitalReadings,
 } from "@/types/health";
@@ -31,6 +32,8 @@ export interface BioTwinBodyMapProps {
   onSelectSubStructure?: (info: SelectedSubStructure) => void;
   vitals?: VitalReadings;
   envTelemetry?: EnvironmentTelemetry;
+  telemetryMode?: TelemetryMode;
+  hardwareSourceLabel?: string;
 }
 
 const SYSTEM_ORDER: BodySystemId[] = [
@@ -149,6 +152,8 @@ export function BioTwinBodyMap({
   onSelectSubStructure,
   vitals,
   envTelemetry,
+  telemetryMode,
+  hardwareSourceLabel,
 }: BioTwinBodyMapProps) {
   const [viewMode, setViewMode] = useState<"3d" | "2d">("3d");
   const [visualMode, setVisualMode] = useState<ClinicalVisualMode>("atlas");
@@ -405,6 +410,8 @@ export function BioTwinBodyMap({
               onSelectSubStructure={onSelectSubStructure}
               vitals={vitals}
               envTelemetry={envTelemetry}
+              telemetryMode={telemetryMode}
+              hardwareSourceLabel={hardwareSourceLabel}
               visualMode={visualMode}
               autoRotate={autoRotate}
               cameraResetToken={cameraResetToken}

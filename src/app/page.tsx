@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BarChart3,
   CheckCircle2,
+  Cpu,
   ExternalLink,
   ListChecks,
   Minus,
@@ -16,17 +17,24 @@ import {
 } from "lucide-react";
 import { AutonomousCmoPanel } from "@/components/AutonomousCmoPanel";
 import { BioTwinBodyMap } from "@/components/BioTwinBodyMap";
+import { HardwareBridgeDrawer } from "@/components/HardwareBridgeDrawer";
 import { RoutineGamificationBar } from "@/components/RoutineGamificationBar";
 import { TelemetryCharts } from "@/components/TelemetryCharts";
 import { VitalsInputPanel } from "@/components/VitalsInputPanel";
 import {
   BASE_14_SOL_HISTORY,
   BODY_SYSTEM_METADATA,
+  CURATED_OSDR_STUDIES,
   DEFAULT_ROUTINE_TASKS,
   DEMO_SCENARIOS,
   MISSION_ENVIRONMENTS,
   NASA_HAZARDS,
 } from "@/data/nasaHrpData";
+import { generateAstroskinTelemetryFrame } from "@/lib/biometricBridge";
+import {
+  fetchIssLiveSnapshot,
+  fetchOsdrStudyMetadata,
+} from "@/lib/issLiveTelemetry";
 import {
   applySpaceWeatherToTelemetry,
   fetchSpaceWeatherAlert,
@@ -39,22 +47,27 @@ import {
   saveRoutineProgress,
   toggleRoutineTask,
 } from "@/lib/routineStorage";
+import { fuseTelemetryStreams } from "@/lib/telemetryMultiplexer";
 import {
   applyCountermeasureToState,
   clampVitalReadings,
   evaluateCrewHealth,
 } from "@/lib/triageEngine";
 import type {
+  BiometricSourceType,
   BodySystemId,
   CountermeasureActionSpec,
   EnvironmentTelemetry,
   ExamStepFinding,
   ExecutedActionLog,
+  IssLiveTelemetrySnapshot,
   MissionEnvironmentId,
   MissionScenario,
+  OsdrStudyLiveMetadata,
   RoutineProgressState,
   ScenarioId,
   SelectedSubStructure,
+  TelemetryMode,
   TriageStatus,
   VitalReadings,
 } from "@/types/health";
@@ -78,6 +91,13 @@ const SCENARIO_SHORT_LABEL: Record<ScenarioId, string> = {
   sans_co2_fluid_shift: "SANS + CO2",
   renal_dehydration: "Renal Ca2+",
   solar_storm: "X-Flare SPE",
+};
+
+const BIOMETRIC_SOURCE_LABEL: Record<BiometricSourceType, string> = {
+  astroskin_stream: "CSA ASTROSKIN 1HZ",
+  web_bluetooth: "WEB BLUETOOTH GATT",
+  webcam_rppg: "WEBCAM rPPG PULSE",
+  external_api: "CHP-IDA API INGEST",
 };
 
 const READINESS_STATUS: Record<
@@ -176,10 +196,40 @@ export default function HomePage() {
   const [activeScenarioId, setActiveScenarioId] = useState<
     ScenarioId | "custom"
   >(initialScenario.id);
-  const [vitals, setVitals] = useState<VitalReadings>(initialScenario.vitals);
-  const [envTelemetry, setEnvTelemetry] = useState<EnvironmentTelemetry>(
+  const [telemetryMode, setTelemetryMode] = useState<TelemetryMode>("preset");
+  const [biometricSource, setBiometricSource] =
+    useState<BiometricSourceType>("astroskin_stream");
+
+  const [presetVitals, setPresetVitals] = useState<VitalReadings>(
+    initialScenario.vitals
+  );
+  const [presetEnv, setPresetEnv] = useState<EnvironmentTelemetry>(
     initialScenario.envTelemetry
   );
+
+  const [liveVitals, setLiveVitals] = useState<VitalReadings>(
+    initialScenario.vitals
+  );
+  const [liveEnv, setLiveEnv] = useState<EnvironmentTelemetry>(
+    MISSION_ENVIRONMENTS.iss_orbit.defaultTelemetry
+  );
+  const [countermeasureVitalsPatch, setCountermeasureVitalsPatch] = useState<
+    Partial<VitalReadings>
+  >({});
+  const [countermeasureEnvPatch, setCountermeasureEnvPatch] = useState<
+    Partial<EnvironmentTelemetry>
+  >({});
+
+  const [issSnapshot, setIssSnapshot] =
+    useState<IssLiveTelemetrySnapshot | null>(null);
+  const [isRefreshingIss, setIsRefreshingIss] = useState<boolean>(false);
+  const [osdrStudies, setOsdrStudies] = useState<OsdrStudyLiveMetadata[]>([
+    CURATED_OSDR_STUDIES["OSD-48"],
+    CURATED_OSDR_STUDIES["OSD-104"],
+    CURATED_OSDR_STUDIES["OSD-530"],
+  ]);
+  const [isRefreshingOsdr, setIsRefreshingOsdr] = useState<boolean>(false);
+
   const [selectedSystem, setSelectedSystem] = useState<BodySystemId>(
     initialScenario.focusSystem
   );
@@ -199,12 +249,65 @@ export default function HomePage() {
   );
   const [isSyncingWeather, setIsSyncingWeather] = useState<boolean>(false);
   const [activeDrawer, setActiveDrawer] = useState<
-    "none" | "trends" | "routine"
+    "none" | "trends" | "routine" | "hardware"
   >("none");
+  const astroTickRef = useRef<number>(0);
+
+  const refreshIssTelemetry = useCallback(async () => {
+    setIsRefreshingIss(true);
+    try {
+      const snap = await fetchIssLiveSnapshot({
+        tickSeed: astroTickRef.current,
+      });
+      setIssSnapshot(snap);
+      setLiveEnv((prev) =>
+        spaceWeather
+          ? applySpaceWeatherToTelemetry(snap.mappedEnvTelemetry, spaceWeather)
+          : {
+              ...snap.mappedEnvTelemetry,
+              solarFlareClass: prev.solarFlareClass,
+            }
+      );
+    } finally {
+      setIsRefreshingIss(false);
+    }
+  }, [spaceWeather]);
+
+  const refreshOsdrStudies = useCallback(async () => {
+    setIsRefreshingOsdr(true);
+    try {
+      const results = await Promise.all([
+        fetchOsdrStudyMetadata("OSD-48"),
+        fetchOsdrStudyMetadata("OSD-104"),
+        fetchOsdrStudyMetadata("OSD-530"),
+      ]);
+      setOsdrStudies(results);
+    } finally {
+      setIsRefreshingOsdr(false);
+    }
+  }, []);
 
   useEffect(() => {
     setRoutineProgress(loadRoutineProgress());
-  }, []);
+    void refreshIssTelemetry();
+  }, [refreshIssTelemetry]);
+
+  useEffect(() => {
+    if (telemetryMode === "preset") return;
+    if (biometricSource !== "astroskin_stream") return;
+
+    const timer = setInterval(() => {
+      astroTickRef.current += 1;
+      setLiveVitals((prev) =>
+        generateAstroskinTelemetryFrame(initialScenario.vitals, astroTickRef.current)
+      );
+      if (astroTickRef.current % 10 === 0) {
+        void refreshIssTelemetry();
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [telemetryMode, biometricSource, initialScenario.vitals, refreshIssTelemetry]);
 
   useEffect(() => {
     if (activeDrawer === "none") return;
@@ -214,6 +317,35 @@ export default function HomePage() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeDrawer]);
+
+  const multiplexed = useMemo(
+    () =>
+      fuseTelemetryStreams({
+        mode: telemetryMode,
+        envId,
+        activeScenarioId,
+        presetVitals,
+        presetEnv,
+        liveVitals,
+        liveEnv,
+        countermeasureVitalsPatch,
+        countermeasureEnvPatch,
+      }),
+    [
+      telemetryMode,
+      envId,
+      activeScenarioId,
+      presetVitals,
+      presetEnv,
+      liveVitals,
+      liveEnv,
+      countermeasureVitalsPatch,
+      countermeasureEnvPatch,
+    ]
+  );
+
+  const vitals = multiplexed.vitals;
+  const envTelemetry = multiplexed.envTelemetry;
 
   const evaluation = useMemo(
     () => evaluateCrewHealth(vitals, envTelemetry, envId),
@@ -233,20 +365,24 @@ export default function HomePage() {
 
   function handleSelectEnvironment(nextEnvId: MissionEnvironmentId) {
     setEnvId(nextEnvId);
-    setActiveScenarioId("custom");
-    const defaultEnvTelemetry = MISSION_ENVIRONMENTS[nextEnvId].defaultTelemetry;
-    setEnvTelemetry(
-      spaceWeather
-        ? applySpaceWeatherToTelemetry(defaultEnvTelemetry, spaceWeather)
-        : defaultEnvTelemetry
-    );
+    if (telemetryMode === "preset") {
+      setActiveScenarioId("custom");
+      const defaultEnvTelemetry = MISSION_ENVIRONMENTS[nextEnvId].defaultTelemetry;
+      setPresetEnv(
+        spaceWeather
+          ? applySpaceWeatherToTelemetry(defaultEnvTelemetry, spaceWeather)
+          : defaultEnvTelemetry
+      );
+    }
   }
 
   function handleSelectScenario(scenario: MissionScenario) {
     setActiveScenarioId(scenario.id);
     setEnvId(scenario.environmentId);
-    setVitals(scenario.vitals);
-    setEnvTelemetry(scenario.envTelemetry);
+    setPresetVitals(scenario.vitals);
+    setPresetEnv(scenario.envTelemetry);
+    setCountermeasureVitalsPatch({});
+    setCountermeasureEnvPatch({});
     setSelectedSystem(scenario.focusSystem);
     setSelectedSubStructure(null);
     setExamFindings({});
@@ -254,13 +390,31 @@ export default function HomePage() {
   }
 
   function handleUpdateVitals(patch: Partial<VitalReadings>) {
-    setActiveScenarioId("custom");
-    setVitals((prev) => clampVitalReadings({ ...prev, ...patch }));
+    if (telemetryMode === "preset") {
+      setActiveScenarioId("custom");
+      setPresetVitals((prev) => clampVitalReadings({ ...prev, ...patch }));
+    } else {
+      setLiveVitals((prev) => clampVitalReadings({ ...prev, ...patch }));
+    }
   }
 
   function handleUpdateEnvTelemetry(patch: Partial<EnvironmentTelemetry>) {
-    setActiveScenarioId("custom");
-    setEnvTelemetry((prev) => ({ ...prev, ...patch }));
+    if (telemetryMode === "preset") {
+      setActiveScenarioId("custom");
+      setPresetEnv((prev) => ({ ...prev, ...patch }));
+    } else {
+      setLiveEnv((prev) => ({ ...prev, ...patch }));
+    }
+  }
+
+  function handleLiveBiometricPatch(patch: Partial<VitalReadings>) {
+    setLiveVitals((prev) => clampVitalReadings({ ...prev, ...patch }));
+  }
+
+  function handleChangeTelemetryMode(nextMode: TelemetryMode) {
+    setTelemetryMode(nextMode);
+    setCountermeasureVitalsPatch({});
+    setCountermeasureEnvPatch({});
   }
 
   function handleUpdateExamFinding(stepKey: string, finding: ExamStepFinding) {
@@ -281,10 +435,25 @@ export default function HomePage() {
   }
 
   function handleExecuteCountermeasure(action: CountermeasureActionSpec) {
-    const next = applyCountermeasureToState(vitals, envTelemetry, action);
-    setActiveScenarioId("custom");
-    setVitals(next.vitals);
-    setEnvTelemetry(next.envTelemetry);
+    if (telemetryMode === "preset") {
+      const next = applyCountermeasureToState(vitals, envTelemetry, action);
+      setActiveScenarioId("custom");
+      setPresetVitals(next.vitals);
+      setPresetEnv(next.envTelemetry);
+    } else {
+      if (action.vitalsPatch) {
+        setCountermeasureVitalsPatch((prev) => ({
+          ...prev,
+          ...action.vitalsPatch,
+        }));
+      }
+      if (action.envPatch) {
+        setCountermeasureEnvPatch((prev) => ({
+          ...prev,
+          ...action.envPatch,
+        }));
+      }
+    }
 
     const now = new Date();
     const utc = `${String(now.getUTCHours()).padStart(2, "0")}:${String(
@@ -325,17 +494,21 @@ export default function HomePage() {
     try {
       const weather = await fetchSpaceWeatherAlert();
       setSpaceWeather(weather);
-      setActiveScenarioId("custom");
-      setEnvTelemetry((prev) =>
-        applySpaceWeatherToTelemetry(
-          {
-            ...prev,
-            dailyRadiationMsv: envConfig.defaultTelemetry.dailyRadiationMsv,
-            saaOrSpeDoseMsv: envConfig.defaultTelemetry.saaOrSpeDoseMsv,
-          },
-          weather
-        )
-      );
+      if (telemetryMode === "preset") {
+        setActiveScenarioId("custom");
+        setPresetEnv((prev) =>
+          applySpaceWeatherToTelemetry(
+            {
+              ...prev,
+              dailyRadiationMsv: envConfig.defaultTelemetry.dailyRadiationMsv,
+              saaOrSpeDoseMsv: envConfig.defaultTelemetry.saaOrSpeDoseMsv,
+            },
+            weather
+          )
+        );
+      } else {
+        setLiveEnv((prev) => applySpaceWeatherToTelemetry(prev, weather));
+      }
     } finally {
       setIsSyncingWeather(false);
     }
@@ -607,6 +780,36 @@ export default function HomePage() {
 
             <button
               type="button"
+              data-testid="open-hardware-drawer"
+              onClick={() =>
+                setActiveDrawer((prev) =>
+                  prev === "hardware" ? "none" : "hardware"
+                )
+              }
+              aria-expanded={activeDrawer === "hardware"}
+              className={`inline-flex min-h-[30px] cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-1 text-[10.5px] font-medium transition ${
+                activeDrawer === "hardware"
+                  ? "border-cyan-400 bg-cyan-500/20 text-cyan-200"
+                  : telemetryMode !== "preset"
+                  ? "border-emerald-400/50 bg-emerald-500/15 text-emerald-200"
+                  : "border-white/10 bg-[#141414] text-white hover:border-white/25"
+              }`}
+            >
+              <Cpu className="h-3 w-3 text-cyan-300" aria-hidden="true" />
+              <span>
+                {telemetryMode === "preset"
+                  ? "Live Bridge"
+                  : telemetryMode === "live_hardware"
+                  ? "Live HW"
+                  : "Hybrid"}
+              </span>
+              {telemetryMode !== "preset" && (
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              )}
+            </button>
+
+            <button
+              type="button"
               data-testid="open-trends-drawer"
               onClick={() =>
                 setActiveDrawer((prev) =>
@@ -700,6 +903,8 @@ export default function HomePage() {
               onSelectSubStructure={setSelectedSubStructure}
               vitals={vitals}
               envTelemetry={envTelemetry}
+              telemetryMode={telemetryMode}
+              hardwareSourceLabel={`${BIOMETRIC_SOURCE_LABEL[biometricSource]} / ISS ETHOS`}
             />
           </div>
 
@@ -720,6 +925,9 @@ export default function HomePage() {
               examFindings={examFindings}
               onUpdateExamFinding={handleUpdateExamFinding}
               onResetSystemExam={handleResetSystemExam}
+              telemetryMode={telemetryMode}
+              biometricSource={biometricSource}
+              issSnapshot={issSnapshot}
             />
           </div>
         </div>
@@ -821,6 +1029,8 @@ export default function HomePage() {
             aria-label={
               activeDrawer === "trends"
                 ? "Vitals Simulator and 14-Sol Telemetry Trends"
+                : activeDrawer === "hardware"
+                ? "Live ISS Telemetry and Biometric Hardware Bridge"
                 : "Crew Countermeasure Routine and NASA Citations"
             }
             onClick={(e) => e.stopPropagation()}
@@ -832,6 +1042,8 @@ export default function HomePage() {
                 <h2 className="text-sm font-semibold text-white">
                   {activeDrawer === "trends"
                     ? "Telemetry Simulator & 14-Sol Trends"
+                    : activeDrawer === "hardware"
+                    ? "Live ISS Telemetry & Biometric Hardware Bridge"
                     : "Crew Countermeasure Routine & NASA Sources"}
                 </h2>
               </div>
@@ -863,6 +1075,22 @@ export default function HomePage() {
                     envId={envId}
                   />
                 </div>
+              ) : activeDrawer === "hardware" ? (
+                <HardwareBridgeDrawer
+                  telemetryMode={telemetryMode}
+                  onChangeTelemetryMode={handleChangeTelemetryMode}
+                  biometricSource={biometricSource}
+                  onChangeBiometricSource={setBiometricSource}
+                  liveVitals={liveVitals}
+                  onLiveBiometricPatch={handleLiveBiometricPatch}
+                  faultDeltaSummary={multiplexed.faultDeltaSummary}
+                  issSnapshot={issSnapshot}
+                  isRefreshingIss={isRefreshingIss}
+                  onRefreshIss={() => void refreshIssTelemetry()}
+                  osdrStudies={osdrStudies}
+                  onRefreshOsdr={() => void refreshOsdrStudies()}
+                  isRefreshingOsdr={isRefreshingOsdr}
+                />
               ) : (
                 <div className="space-y-5">
                   <RoutineGamificationBar
