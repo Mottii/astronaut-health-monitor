@@ -1,4 +1,5 @@
 import type {
+  AstronautBiologicalProfile,
   BodySystemId,
   BodySystemMetadata,
   CountermeasureActionSpec,
@@ -782,6 +783,22 @@ export const EXECUTABLE_COUNTERMEASURES: Record<
       },
       routineTaskId: "amsler_ocular",
     },
+    {
+      id: "neuro_acetazolamide_rx",
+      systemId: "neuro_ocular",
+      label: "Administer Acetazolamide 250 mg Carbonic Anhydrase Rx",
+      protocolCode: "PHARM-SANS-04",
+      hardwareTarget: "CMO Pharmacy Pack (Oral Rx)",
+      deltaSummary:
+        "Lowers choroid plexus CSF secretion · BP -> 122/78 · Acuity cleared (Check Renal Ca2+)",
+      vitalsPatch: {
+        bloodPressureSystolic: 122,
+        bloodPressureDiastolic: 78,
+        ocularFinding: "clear",
+      },
+      isPharmacological: true,
+      primaryEnzyme: "CA2_RENAL",
+    },
   ],
   cardiovascular: [
     {
@@ -825,6 +842,8 @@ export const EXECUTABLE_COUNTERMEASURES: Record<
         hydrationMl: 2550,
       },
       routineTaskId: "renal_hydration",
+      isPharmacological: true,
+      primaryEnzyme: "CYP2C9",
     },
     {
       id: "msk_ared_session",
@@ -895,6 +914,8 @@ export const EXECUTABLE_COUNTERMEASURES: Record<
         heartRateBpm: 72,
         sleepHours: 7.4,
       },
+      isPharmacological: true,
+      primaryEnzyme: "CYP2D6",
     },
   ],
   behavioral_circadian: [
@@ -1083,3 +1104,93 @@ export const CURATED_OSDR_STUDIES: Record<string, OsdrStudyLiveMetadata> = {
     osdrUrl: "https://osdr.nasa.gov/bio/repo/data/studies/OSD-37",
   },
 };
+
+export const DEFAULT_CREW_PROFILES: AstronautBiologicalProfile[] = [
+  {
+    id: "ares_1_vance",
+    callsign: "ARES-1",
+    name: "Cmdr. Elena Vance",
+    role: "Mission Commander",
+    missionAssignment: "iss_orbit",
+    summaryTag: "SANS-Susceptible Genotype (MTRR 66GG)",
+    biochemical: {
+      urinaryCalciumMgDay: 165,
+      urinaryCitrateMgDay: 410,
+      serumCtxPgMl: 290,
+      baselineLymphocyteCount: 2350,
+      serumFerritinNgMl: 95,
+      baselineNflPgMl: 11.2,
+    },
+    pharmacogenomics: {
+      mtrrGenotype: "GG_sans_risk",
+      cyp2d6Phenotype: "ultra_rapid",
+      cyp2c9Phenotype: "normal",
+      atmDnaRepairScore: 1.05,
+    },
+    endurance: {
+      co2ReactivitySlope: 1.65,
+      baselineOnsdMm: 5.1,
+      dexaBoneTScore: 0.4,
+      lbnpEnduranceMin: 28,
+      radiationToleranceMsvDay: 2.2,
+    },
+  },
+  {
+    id: "ares_2_chen",
+    callsign: "ARES-2",
+    name: "Dr. Marcus Chen",
+    role: "Flight Engineer & CMO",
+    missionAssignment: "mars_transit",
+    summaryTag: "Hypercalciuric / Osteopenic Baseline",
+    biochemical: {
+      urinaryCalciumMgDay: 295,
+      urinaryCitrateMgDay: 205,
+      serumCtxPgMl: 640,
+      baselineLymphocyteCount: 2100,
+      serumFerritinNgMl: 145,
+      baselineNflPgMl: 8.4,
+    },
+    pharmacogenomics: {
+      mtrrGenotype: "AA_normal",
+      cyp2d6Phenotype: "normal",
+      cyp2c9Phenotype: "poor",
+      atmDnaRepairScore: 1.0,
+    },
+    endurance: {
+      co2ReactivitySlope: 0.95,
+      baselineOnsdMm: 4.5,
+      dexaBoneTScore: -1.3,
+      lbnpEnduranceMin: 34,
+      radiationToleranceMsvDay: 2.0,
+    },
+  },
+  {
+    id: "ares_3_korolev",
+    callsign: "ARES-3",
+    name: "Spec. Aria Korolev",
+    role: "Surface Geology & Bio Specialist",
+    missionAssignment: "lunar_rover",
+    summaryTag: "Radiosensitive Hematopoietic Profile (ATM/ALC)",
+    biochemical: {
+      urinaryCalciumMgDay: 150,
+      urinaryCitrateMgDay: 440,
+      serumCtxPgMl: 260,
+      baselineLymphocyteCount: 1420,
+      serumFerritinNgMl: 185,
+      baselineNflPgMl: 9.8,
+    },
+    pharmacogenomics: {
+      mtrrGenotype: "AA_normal",
+      cyp2d6Phenotype: "intermediate",
+      cyp2c9Phenotype: "normal",
+      atmDnaRepairScore: 0.68,
+    },
+    endurance: {
+      co2ReactivitySlope: 0.85,
+      baselineOnsdMm: 4.4,
+      dexaBoneTScore: 0.6,
+      lbnpEnduranceMin: 38,
+      radiationToleranceMsvDay: 1.35,
+    },
+  },
+];

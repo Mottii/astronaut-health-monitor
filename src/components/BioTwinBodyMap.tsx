@@ -1,12 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
-  AlertTriangle,
-  Box,
-  CheckCircle2,
-  Layers,
+  Check,
+  ChevronDown,
   RotateCcw,
+  SlidersHorizontal,
 } from "lucide-react";
 import {
   BioTwin3DStage,
@@ -45,16 +44,22 @@ const SYSTEM_ORDER: BodySystemId[] = [
   "musculoskeletal_renal",
 ];
 
-const SYSTEM_AVATAR_COLOR: Record<
-  BodySystemId,
-  { hex: string; shapeClass: string; tilt: string }
+const SYSTEM_ACCENT_HEX: Record<BodySystemId, string> = {
+  neuro_ocular: "#2dd4bf",
+  behavioral_circadian: "#818cf8",
+  cardiovascular: "#fb7185",
+  immune_hematology: "#c084fc",
+  metabolic_endocrine: "#f97316",
+  musculoskeletal_renal: "#4ade80",
+};
+
+const VISUAL_MODE_LABELS: Record<
+  ClinicalVisualMode,
+  { label: string; desc: string }
 > = {
-  neuro_ocular: { hex: "#2dd4bf", shapeClass: "rounded-full", tilt: "-rotate-6" },
-  behavioral_circadian: { hex: "#818cf8", shapeClass: "rounded-[14px]", tilt: "rotate-6" },
-  cardiovascular: { hex: "#fb7185", shapeClass: "rounded-full", tilt: "-rotate-3" },
-  immune_hematology: { hex: "#c084fc", shapeClass: "rounded-[14px]", tilt: "rotate-3" },
-  metabolic_endocrine: { hex: "#f97316", shapeClass: "rounded-full", tilt: "-rotate-6" },
-  musculoskeletal_renal: { hex: "#4ade80", shapeClass: "rounded-[14px]", tilt: "rotate-3" },
+  atlas: { label: "Atlas", desc: "Layered organ & vascular surfaces" },
+  xray: { label: "X-Ray CT", desc: "Translucent skeletal & shell radiogram" },
+  vascular: { label: "Vascular", desc: "Hemodynamic arterial & venous flow" },
 };
 
 const STATUS_STYLE: Record<
@@ -62,26 +67,26 @@ const STATUS_STYLE: Record<
   {
     color: string;
     dotClass: string;
-    pillClass: string;
+    barClass: string;
     label: string;
   }
 > = {
   green: {
     color: "#34d399",
     dotClass: "bg-emerald-400",
-    pillClass: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300",
+    barClass: "bg-emerald-400/70",
     label: "NOMINAL",
   },
   amber: {
     color: "#fbbf24",
     dotClass: "bg-amber-400",
-    pillClass: "border-amber-500/25 bg-amber-500/10 text-amber-300",
+    barClass: "bg-amber-400/80",
     label: "CAUTION",
   },
   red: {
     color: "#f87171",
     dotClass: "bg-rose-400",
-    pillClass: "border-rose-500/30 bg-rose-500/15 text-rose-300",
+    barClass: "bg-rose-400/85",
     label: "ALERT",
   },
 };
@@ -117,29 +122,119 @@ function buildCascadeCurvePath(
   return `M ${from.cx} ${from.cy} Q ${ctrlX} ${ctrlY} ${to.cx} ${to.cy}`;
 }
 
-function BotMarkAvatar({
-  color,
-  shapeClass,
-  tilt,
-  size = "md",
+/**
+ * Precision 1.25px vector anatomical glyph for each NASA HRP organ system,
+ * replacing generic icon badges.
+ */
+function OrganSystemGlyph({
+  systemId,
+  accentHex,
+  active,
 }: {
-  color: string;
-  shapeClass: string;
-  tilt?: string;
-  size?: "sm" | "md";
+  systemId: BodySystemId;
+  accentHex: string;
+  active: boolean;
 }) {
-  const dim = size === "sm" ? "h-7 w-7" : "h-10 w-10";
-  const eyeW = size === "sm" ? "w-[2.5px] h-[6px]" : "w-[3.5px] h-[9px]";
+  const stroke = active ? accentHex : "rgba(255,255,255,0.68)";
   return (
     <span
-      className={`inline-flex shrink-0 items-center justify-center ${dim} ${shapeClass} shadow-inner`}
-      style={{ backgroundColor: color }}
+      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-colors ${
+        active
+          ? "border-white/20 bg-[#232327]"
+          : "border-white/[0.06] bg-[#161618] group-hover:border-white/15"
+      }`}
       aria-hidden="true"
     >
-      <span className={`flex items-center gap-[3px] ${tilt ?? ""}`}>
-        <span className={`${eyeW} rounded-full bg-[#0a0a0a]`} />
-        <span className={`${eyeW} rounded-full bg-[#0a0a0a]`} />
-      </span>
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none">
+        {systemId === "neuro_ocular" && (
+          <>
+            <path
+              d="M3 12C5.4 7.8 8.4 6 12 6C15.6 6 18.6 7.8 21 12C18.6 16.2 15.6 18 12 18C8.4 18 5.4 16.2 3 12Z"
+              stroke={stroke}
+              strokeWidth="1.3"
+            />
+            <circle cx="12" cy="12" r="3" stroke={stroke} strokeWidth="1.3" />
+            <circle cx="12" cy="12" r="1" fill={stroke} />
+          </>
+        )}
+        {systemId === "behavioral_circadian" && (
+          <>
+            <path
+              d="M3.5 13C6 13 6.8 7.5 9.3 7.5C11.8 7.5 12.4 16.5 14.9 16.5C17.4 16.5 18.2 11 20.5 11"
+              stroke={stroke}
+              strokeWidth="1.35"
+              strokeLinecap="round"
+            />
+            <circle
+              cx="12"
+              cy="12"
+              r="8.5"
+              stroke="rgba(255,255,255,0.18)"
+              strokeDasharray="2 2.5"
+              strokeWidth="1"
+            />
+          </>
+        )}
+        {systemId === "cardiovascular" && (
+          <path
+            d="M2.5 12.5H6.5L8.6 7L11.4 17.5L13.8 10.5L15.6 12.5H21.5"
+            stroke={stroke}
+            strokeWidth="1.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        )}
+        {systemId === "immune_hematology" && (
+          <>
+            <polygon
+              points="12,3.5 19,7.5 19,16.5 12,20.5 5,16.5 5,7.5"
+              stroke={stroke}
+              strokeWidth="1.25"
+              strokeLinejoin="round"
+            />
+            <circle cx="12" cy="12" r="2.2" stroke={stroke} strokeWidth="1.2" />
+            <path
+              d="M12 6V9.5M17 9L14 10.8M17 15L14 13.2"
+              stroke={stroke}
+              strokeWidth="1.1"
+              strokeLinecap="round"
+            />
+          </>
+        )}
+        {systemId === "metabolic_endocrine" && (
+          <>
+            <circle
+              cx="12"
+              cy="12"
+              r="7.5"
+              stroke={stroke}
+              strokeWidth="1.25"
+              strokeDasharray="11 4"
+            />
+            <path
+              d="M8.5 12.5C9.5 9.8 14.5 9.8 15.5 12.5C14.5 15.2 9.5 15.2 8.5 12.5Z"
+              stroke={stroke}
+              strokeWidth="1.2"
+            />
+            <circle cx="12" cy="12.5" r="1.1" fill={stroke} />
+          </>
+        )}
+        {systemId === "musculoskeletal_renal" && (
+          <>
+            <path
+              d="M9 4.5C7 4.5 5.8 6.4 6 8.5C6.2 10.3 7.5 11.2 8 12.5C8.5 14 7.4 16 8.5 17.8C9.3 19 10.8 19.2 11.2 17.6L11.5 7.5C11.5 5.6 10.6 4.5 9 4.5Z"
+              stroke={stroke}
+              strokeWidth="1.25"
+            />
+            <path
+              d="M15 6.5C17 6.5 18.2 8.4 18 10.5C17.8 12.3 16.5 13.2 16 14.5C15.5 16 16.4 17.6 15.2 19C14.3 19.9 13 19.5 12.8 18"
+              stroke={stroke}
+              strokeWidth="1.25"
+              strokeLinecap="round"
+            />
+          </>
+        )}
+      </svg>
     </span>
   );
 }
@@ -159,31 +254,54 @@ export function BioTwinBodyMap({
   const [visualMode, setVisualMode] = useState<ClinicalVisualMode>("atlas");
   const [autoRotate, setAutoRotate] = useState(false);
   const [cameraResetToken, setCameraResetToken] = useState(0);
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const menuContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!viewMenuOpen) return;
+    const handleOutside = (event: MouseEvent) => {
+      if (
+        menuContainerRef.current &&
+        !menuContainerRef.current.contains(event.target as Node)
+      ) {
+        setViewMenuOpen(false);
+      }
+    };
+    const handleEsc = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setViewMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handleOutside);
+    window.addEventListener("keydown", handleEsc);
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      window.removeEventListener("keydown", handleEsc);
+    };
+  }, [viewMenuOpen]);
 
   return (
     <section
       aria-label="BioTwin Anatomical Body Map"
-      className="flex min-h-0 flex-col overflow-hidden lg:h-full lg:flex-row"
+      className="flex min-h-0 flex-col overflow-hidden bg-[#0f0f10] lg:h-full lg:flex-row"
     >
-      {/* Left Sidebar (Compact Clinical Organ Node Selector & Cascade Feed) */}
-      <aside className="flex shrink-0 flex-col justify-between border-b border-white/[0.07] bg-[#141414] p-3.5 lg:w-[248px] xl:w-[272px] lg:overflow-y-auto lg:border-r lg:border-b-0">
+      {/* Left Sidebar (Restrained Monochrome Organ Nodes & Domino Feed) */}
+      <aside className="flex shrink-0 flex-col justify-between border-b border-white/[0.06] bg-[#111113] p-3.5 lg:w-[244px] xl:w-[264px] lg:overflow-y-auto lg:border-r lg:border-b-0">
         <div>
           <div className="mb-3 flex items-center justify-between">
-            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#7e828a]">
+            <span className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-[#7e828a]">
               Organ Nodes
             </span>
-            <span className="font-mono text-[11px] text-[#7e828a]">
+            <span className="font-mono text-[10.5px] text-[#5e626a]">
               6 Systems
             </span>
           </div>
 
-          {/* 3x2 Signature Squircle Avatar Grid */}
-          <div className="grid grid-cols-3 gap-2">
+          {/* 3x2 Monochrome Anatomical Node Grid */}
+          <div className="grid grid-cols-3 gap-1.5">
             {SYSTEM_ORDER.map((systemId) => {
               const meta = BODY_SYSTEM_METADATA[systemId];
               const assessment = assessments[systemId];
               const style = STATUS_STYLE[assessment.status];
-              const avatar = SYSTEM_AVATAR_COLOR[systemId];
+              const accentHex = SYSTEM_ACCENT_HEX[systemId];
               const isSelected = selectedSystem === systemId;
 
               return (
@@ -192,28 +310,36 @@ export function BioTwinBodyMap({
                   type="button"
                   aria-pressed={isSelected}
                   onClick={() => onSelectSystem(systemId)}
-                  className={`group relative flex flex-col items-center rounded-2xl border p-2.5 text-center transition active:scale-[0.98] ${
+                  className={`group relative flex cursor-pointer flex-col items-center rounded-xl border p-2 text-center transition active:scale-[0.98] ${
                     isSelected
-                      ? "border-white/20 bg-[#202020] shadow-sm"
-                      : "border-transparent bg-transparent hover:border-white/[0.08] hover:bg-[#1b1b1b]"
+                      ? "border-white/20 bg-[#1c1c1f]"
+                      : "border-white/[0.04] bg-[#151517]/80 hover:border-white/10 hover:bg-[#1a1a1d]"
                   }`}
                 >
                   <span
-                    className={`absolute top-2 right-2 h-1.5 w-1.5 rounded-full ${style.dotClass}`}
+                    className={`absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full ${style.dotClass}`}
                     title={style.label}
                   />
 
-                  <BotMarkAvatar
-                    color={avatar.hex}
-                    shapeClass={avatar.shapeClass}
-                    tilt={avatar.tilt}
+                  <OrganSystemGlyph
+                    systemId={systemId}
+                    accentHex={accentHex}
+                    active={isSelected}
                   />
 
-                  <span className="mt-2 line-clamp-1 text-[11px] font-medium text-white">
+                  <span className="mt-2 line-clamp-1 text-[10.5px] font-medium text-[#e4e4e7]">
                     {meta.shortLabel.split(" / ")[0]}
                   </span>
-                  <span className="mt-0.5 font-mono text-[10px] tabular-nums text-[#7e828a]">
+                  <span className="mt-0.5 font-mono text-[10px] tabular-nums text-[#71717a]">
                     {assessment.score}/100
+                  </span>
+                  <span className="mt-1.5 h-[2px] w-full overflow-hidden rounded-full bg-white/[0.06]">
+                    <span
+                      className={`block h-full rounded-full ${style.barClass}`}
+                      style={{
+                        width: `${Math.max(8, Math.min(100, assessment.score))}%`,
+                      }}
+                    />
                   </span>
                 </button>
               );
@@ -222,16 +348,16 @@ export function BioTwinBodyMap({
         </div>
 
         {/* Bottom Domino Cascade Monitor Feed */}
-        <div className="mt-5 border-t border-white/[0.07] pt-4">
+        <div className="mt-4 border-t border-white/[0.06] pt-3.5">
           <div className="mb-2.5 flex items-center justify-between">
-            <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#7e828a]">
+            <span className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-[#7e828a]">
               Domino Cascades
             </span>
             <span
-              className={`rounded-full border px-2 py-0.5 font-mono text-[10px] tabular-nums ${
+              className={`rounded-md border px-1.5 py-0.5 font-mono text-[10px] tabular-nums ${
                 cascades.length > 0
-                  ? "border-amber-500/25 bg-amber-500/10 text-amber-300"
-                  : "border-white/10 bg-[#1b1b1b] text-[#7e828a]"
+                  ? "border-amber-400/25 bg-[#1b1812] text-amber-300"
+                  : "border-white/[0.07] bg-[#161618] text-[#71717a]"
               }`}
             >
               {cascades.length} Active
@@ -239,16 +365,34 @@ export function BioTwinBodyMap({
           </div>
 
           {cascades.length === 0 ? (
-            <div className="flex items-start gap-2.5 rounded-xl bg-[#1b1b1b]/80 p-2.5">
-              <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-400">
-                <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-              </span>
+            <div className="flex items-start gap-2.5 rounded-xl border border-white/[0.05] bg-[#151517] px-3 py-2.5">
+              <svg
+                viewBox="0 0 16 16"
+                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400"
+                fill="none"
+                aria-hidden="true"
+              >
+                <circle
+                  cx="8"
+                  cy="8"
+                  r="6"
+                  stroke="currentColor"
+                  strokeWidth="1.25"
+                />
+                <path
+                  d="M5.5 8.2L7.2 9.8L10.8 6.2"
+                  stroke="currentColor"
+                  strokeWidth="1.25"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
               <div className="min-w-0">
-                <p className="text-xs font-medium text-white">
+                <p className="text-[11.5px] font-medium text-[#e4e4e7]">
                   All Cascades Nominal
                 </p>
-                <p className="mt-0.5 text-[11px] leading-snug text-[#7e828a]">
-                  No cross-organ hazard dominoes triggered.
+                <p className="mt-0.5 text-[10.5px] leading-snug text-[#71717a]">
+                  No cross-organ hazard dominoes active.
                 </p>
               </div>
             </div>
@@ -256,31 +400,42 @@ export function BioTwinBodyMap({
             <div className="space-y-1.5">
               {cascades.map((cascade) => {
                 const isRed = cascade.severity === "red";
+                const fromShort = BODY_SYSTEM_METADATA[cascade.fromSystem].shortLabel
+                  .split(" / ")[0]
+                  .toUpperCase();
+                const toShort = BODY_SYSTEM_METADATA[cascade.toSystem].shortLabel
+                  .split(" / ")[0]
+                  .toUpperCase();
                 return (
                   <button
                     key={cascade.id}
                     type="button"
                     onClick={() => onSelectSystem(cascade.toSystem)}
-                    className="flex w-full items-start gap-2.5 rounded-xl border border-transparent bg-[#1b1b1b]/70 p-2.5 text-left transition hover:border-white/10 hover:bg-[#202020]"
+                    className={`flex w-full cursor-pointer items-stretch gap-2.5 rounded-xl border border-white/[0.06] bg-[#151517] p-2.5 text-left transition hover:border-white/15 hover:bg-[#1a1a1d]`}
                   >
-                    <BotMarkAvatar
-                      color={isRed ? "#f87171" : "#fbbf24"}
-                      shapeClass="rounded-full"
-                      size="sm"
+                    <span
+                      className={`w-[2px] shrink-0 rounded-full ${
+                        isRed ? "bg-rose-400" : "bg-amber-400"
+                      }`}
+                      aria-hidden="true"
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-1.5">
-                        <p className="truncate text-xs font-medium text-white">
+                        <p className="truncate text-[11.5px] font-medium text-[#f4f4f5]">
                           {cascade.title}
                         </p>
-                        <AlertTriangle
-                          className={`h-3 w-3 shrink-0 ${
-                            isRed ? "text-rose-400" : "text-amber-400"
+                        <span
+                          className={`shrink-0 font-mono text-[9.5px] font-semibold uppercase ${
+                            isRed ? "text-rose-400" : "text-amber-300"
                           }`}
-                          aria-hidden="true"
-                        />
+                        >
+                          {isRed ? "HIGH" : "WARN"}
+                        </span>
                       </div>
-                      <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-[#7e828a]">
+                      <p className="mt-0.5 font-mono text-[9.5px] text-[#71717a]">
+                        {fromShort} → {toShort}
+                      </p>
+                      <p className="mt-1 line-clamp-2 text-[10.5px] leading-snug text-[#a1a1aa]">
                         {cascade.immediateAction}
                       </p>
                     </div>
@@ -293,110 +448,193 @@ export function BioTwinBodyMap({
       </aside>
 
       {/* Center Anatomical Viewport */}
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col justify-between overflow-hidden bg-[#0a0a0a] p-3 sm:p-4">
-        {/* Viewport Top Telemetry Strip */}
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-mono text-[11px] uppercase tracking-wider text-[#7e828a] tabular-nums">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col justify-between overflow-hidden bg-[#0a0a0b] p-3 sm:p-3.5">
+        {/* Single Compact Telemetry Bar + Engine View Menu */}
+        <div className="flex items-center justify-between gap-2 pb-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                viewMode === "3d" ? "bg-emerald-400" : "bg-zinc-400"
+              }`}
+            />
+            <span className="truncate font-mono text-[10.5px] uppercase tracking-wider text-[#71717a] tabular-nums">
               {viewMode === "3d"
-                ? "BIOTWIN // HRA-3D CLINICAL"
-                : "BIOTWIN // X:210 Y:220"}
+                ? `BIOTWIN // HRA-3D · ${VISUAL_MODE_LABELS[visualMode].label.toUpperCase()}`
+                : "BIOTWIN // 2D BLUEPRINT · X:210 Y:220"}
             </span>
-
-            <div
-              role="group"
-              aria-label="BioTwin view mode"
-              className="inline-flex items-center rounded-full border border-white/10 bg-[#141414] p-0.5"
-            >
-              <button
-                type="button"
-                onClick={() => setViewMode("3d")}
-                aria-pressed={viewMode === "3d"}
-                className={`inline-flex cursor-pointer items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
-                  viewMode === "3d"
-                    ? "bg-white text-black"
-                    : "text-[#7e828a] hover:text-white"
-                }`}
-              >
-                <Box className="h-3 w-3" aria-hidden="true" />
-                3D BioTwin
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode("2d")}
-                aria-pressed={viewMode === "2d"}
-                className={`inline-flex cursor-pointer items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
-                  viewMode === "2d"
-                    ? "bg-white text-black"
-                    : "text-[#7e828a] hover:text-white"
-                }`}
-              >
-                <Layers className="h-3 w-3" aria-hidden="true" />
-                2D Blueprint
-              </button>
-            </div>
           </div>
 
-          {viewMode === "3d" && (
-            <div className="flex flex-wrap items-center justify-between gap-1.5">
-              <div
-                role="group"
-                aria-label="Clinical visualization mode"
-                className="inline-flex items-center rounded-full border border-white/10 bg-[#141414] p-0.5"
+          <div
+            ref={menuContainerRef}
+            className="relative flex shrink-0 items-center gap-1.5"
+          >
+            {viewMode === "3d" && (
+              <button
+                type="button"
+                onClick={() => setCameraResetToken((n) => n + 1)}
+                title="Reset 3D Camera Orbit"
+                aria-label="Reset 3D Camera Orbit"
+                className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-white/[0.08] bg-[#141416] text-[#8b909a] transition hover:border-white/20 hover:text-white"
               >
-                {(
-                  [
-                    ["atlas", "Atlas"],
-                    ["xray", "X-Ray CT"],
-                    ["vascular", "Vascular"],
-                  ] as const
-                ).map(([modeKey, label]) => (
+                <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            )}
+
+            <button
+              type="button"
+              data-testid="biotwin-view-menu-btn"
+              aria-expanded={viewMenuOpen}
+              aria-haspopup="menu"
+              onClick={() => setViewMenuOpen((prev) => !prev)}
+              className={`inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition ${
+                viewMenuOpen
+                  ? "border-white/25 bg-[#202024] text-white"
+                  : "border-white/[0.08] bg-[#141416] text-[#d4d4d8] hover:border-white/20 hover:text-white"
+              }`}
+            >
+              <SlidersHorizontal className="h-3 w-3 text-[#8b909a]" aria-hidden="true" />
+              <span>
+                {viewMode === "3d"
+                  ? `View · ${VISUAL_MODE_LABELS[visualMode].label}`
+                  : "View · 2D"}
+              </span>
+              <ChevronDown
+                className={`h-3 w-3 text-[#71717a] transition-transform ${
+                  viewMenuOpen ? "rotate-180" : ""
+                }`}
+                aria-hidden="true"
+              />
+            </button>
+
+            {viewMenuOpen && (
+              <div
+                role="menu"
+                data-testid="biotwin-view-menu-popover"
+                className="absolute top-9 right-0 z-30 w-64 rounded-2xl border border-white/[0.09] bg-[#121214]/95 p-2.5 shadow-2xl backdrop-blur-xl"
+              >
+                <div className="px-1.5 pb-1 text-[10px] font-medium uppercase tracking-[0.12em] text-[#71717a]">
+                  Projection Engine
+                </div>
+                <div className="grid grid-cols-2 gap-1 rounded-xl border border-white/[0.06] bg-[#0a0a0b] p-0.5">
                   <button
-                    key={modeKey}
                     type="button"
-                    onClick={() => setVisualMode(modeKey)}
-                    aria-pressed={visualMode === modeKey}
-                    className={`cursor-pointer rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
-                      visualMode === modeKey
-                        ? "bg-white/15 text-white"
-                        : "text-[#7e828a] hover:text-white"
+                    role="menuitemradio"
+                    data-testid="view-mode-3d-btn"
+                    aria-checked={viewMode === "3d"}
+                    onClick={() => setViewMode("3d")}
+                    className={`cursor-pointer rounded-lg px-2 py-1.5 text-[11px] font-medium transition ${
+                      viewMode === "3d"
+                        ? "bg-white text-[#0a0a0a]"
+                        : "text-[#8b909a] hover:text-white"
                     }`}
                   >
-                    {label}
+                    3D BioTwin
                   </button>
-                ))}
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setAutoRotate((prev) => !prev)}
-                  aria-pressed={autoRotate}
-                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                    autoRotate
-                      ? "border-white/25 bg-white/15 text-white"
-                      : "border-white/10 bg-[#141414] text-[#7e828a] hover:text-white"
-                  }`}
-                >
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      autoRotate ? "bg-emerald-400" : "bg-[#7e828a]"
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    data-testid="view-mode-2d-btn"
+                    aria-checked={viewMode === "2d"}
+                    onClick={() => setViewMode("2d")}
+                    className={`cursor-pointer rounded-lg px-2 py-1.5 text-[11px] font-medium transition ${
+                      viewMode === "2d"
+                        ? "bg-white text-[#0a0a0a]"
+                        : "text-[#8b909a] hover:text-white"
                     }`}
-                  />
-                  Auto-Rotate
-                </button>
+                  >
+                    2D Blueprint
+                  </button>
+                </div>
 
-                <button
-                  type="button"
-                  onClick={() => setCameraResetToken((n) => n + 1)}
-                  className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-white/10 bg-[#141414] px-2.5 py-1 text-[11px] font-medium text-[#7e828a] transition-colors hover:border-white/20 hover:text-white"
-                >
-                  <RotateCcw className="h-3 w-3" aria-hidden="true" />
-                  Reset View
-                </button>
+                {viewMode === "3d" && (
+                  <>
+                    <div className="mt-2.5 border-t border-white/[0.06] pt-2">
+                      <div className="px-1.5 pb-1 text-[10px] font-medium uppercase tracking-[0.12em] text-[#71717a]">
+                        Clinical Shader
+                      </div>
+                      <div className="space-y-0.5">
+                        {(["atlas", "xray", "vascular"] as const).map(
+                          (modeKey) => {
+                            const active = visualMode === modeKey;
+                            const meta = VISUAL_MODE_LABELS[modeKey];
+                            return (
+                              <button
+                                key={modeKey}
+                                type="button"
+                                role="menuitemradio"
+                                data-testid={`shader-mode-${modeKey}-btn`}
+                                aria-checked={active}
+                                onClick={() => setVisualMode(modeKey)}
+                                className={`flex w-full cursor-pointer items-center justify-between rounded-xl px-2 py-1.5 text-left transition ${
+                                  active
+                                    ? "bg-white/[0.08] text-white"
+                                    : "text-[#a1a1aa] hover:bg-white/[0.04] hover:text-white"
+                                }`}
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-[11.5px] font-medium">
+                                    {meta.label}
+                                  </p>
+                                  <p className="truncate text-[10px] text-[#71717a]">
+                                    {meta.desc}
+                                  </p>
+                                </div>
+                                {active && (
+                                  <Check
+                                    className="h-3.5 w-3.5 shrink-0 text-white"
+                                    aria-hidden="true"
+                                  />
+                                )}
+                              </button>
+                            );
+                          }
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-2 border-t border-white/[0.06] pt-2 space-y-1">
+                      <button
+                        type="button"
+                        role="menuitemcheckbox"
+                        data-testid="toggle-autorotate-btn"
+                        aria-checked={autoRotate}
+                        onClick={() => setAutoRotate((prev) => !prev)}
+                        className="flex w-full cursor-pointer items-center justify-between rounded-xl px-2 py-1.5 text-[11.5px] font-medium text-[#d4d4d8] transition hover:bg-white/[0.04] hover:text-white"
+                      >
+                        <span>Auto-Rotate Turntable</span>
+                        <span
+                          className={`inline-flex h-4 w-7 items-center rounded-full p-0.5 transition ${
+                            autoRotate ? "bg-white" : "bg-white/15"
+                          }`}
+                        >
+                          <span
+                            className={`h-3 w-3 rounded-full transition-transform ${
+                              autoRotate
+                                ? "translate-x-3 bg-[#0a0a0a]"
+                                : "translate-x-0 bg-[#71717a]"
+                            }`}
+                          />
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setCameraResetToken((n) => n + 1);
+                          setViewMenuOpen(false);
+                        }}
+                        className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-2 py-1.5 text-[11.5px] font-medium text-[#a1a1aa] transition hover:bg-white/[0.04] hover:text-white"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Reset Camera Orbit</span>
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         {/* Center Viewport Body: Interactive 3D Organ Atlas or 2D Blueprint SVG */}
