@@ -1071,10 +1071,14 @@ export function BioTwin3DStage({
       const pos = geometry.getAttribute("position");
       if (!pos) return;
       const idx = geometry.getIndex();
-      const isArmTri = (a: number, b: number, c: number) => {
+      const isReplacedTri = (a: number, b: number, c: number) => {
         const cx = (pos.getX(a) + pos.getX(b) + pos.getX(c)) / 3;
         const cy = (pos.getY(a) + pos.getY(b) + pos.getY(c)) / 3;
-        return Math.abs(cx) > 0.205 && cy < 0.59;
+        const cz = (pos.getZ(a) + pos.getZ(b) + pos.getZ(c)) / 3;
+        const isArm = Math.abs(cx) > 0.205 && cy < 0.59;
+        const isClavicle =
+          Math.abs(cx) > 0.020 && cy > 0.612 && cy < 0.668 && cz > 0.0;
+        return isArm || isClavicle;
       };
       if (idx) {
         const kept: number[] = [];
@@ -1082,7 +1086,7 @@ export function BioTwin3DStage({
           const a = idx.getX(i);
           const b = idx.getX(i + 1);
           const c = idx.getX(i + 2);
-          if (!isArmTri(a, b, c)) {
+          if (!isReplacedTri(a, b, c)) {
             kept.push(a, b, c);
           }
         }
@@ -1093,10 +1097,14 @@ export function BioTwin3DStage({
     const alignBoneSegmentToVector = (
       meshes: THREE.Mesh[],
       targetStart: THREE.Vector3,
-      targetEnd: THREE.Vector3
+      targetEnd: THREE.Vector3,
+      proximalMode: "maxY" | "minX" | "maxX" = "maxY"
     ) => {
-      let minY = Infinity;
-      let maxY = -Infinity;
+      let minVal = Infinity;
+      let maxVal = -Infinity;
+      const getCoord = (vec: THREE.Vector3) =>
+        proximalMode === "maxY" ? vec.y : vec.x;
+
       for (const m of meshes) {
         m.updateMatrixWorld(true);
         const pos = m.geometry.getAttribute("position");
@@ -1104,13 +1112,14 @@ export function BioTwin3DStage({
         const v = new THREE.Vector3();
         for (let i = 0; i < pos.count; i++) {
           v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
-          if (v.y < minY) minY = v.y;
-          if (v.y > maxY) maxY = v.y;
+          const c = getCoord(v);
+          if (c < minVal) minVal = c;
+          if (c > maxVal) maxVal = c;
         }
       }
-      const span = Math.max(0.001, maxY - minY);
-      const topThresh = maxY - span * 0.12;
-      const botThresh = minY + span * 0.12;
+      const span = Math.max(0.001, maxVal - minVal);
+      const highThresh = maxVal - span * 0.12;
+      const lowThresh = minVal + span * 0.12;
       const prox = new THREE.Vector3();
       const dist = new THREE.Vector3();
       let proxCount = 0;
@@ -1122,10 +1131,15 @@ export function BioTwin3DStage({
         if (!pos) continue;
         for (let i = 0; i < pos.count; i++) {
           v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
-          if (v.y >= topThresh) {
+          const c = getCoord(v);
+          const isProx =
+            proximalMode === "minX" ? c <= lowThresh : c >= highThresh;
+          const isDist =
+            proximalMode === "minX" ? c >= highThresh : c <= lowThresh;
+          if (isProx) {
             prox.add(v);
             proxCount++;
-          } else if (v.y <= botThresh) {
+          } else if (isDist) {
             dist.add(v);
             distCount++;
           }
@@ -1341,7 +1355,21 @@ export function BioTwin3DStage({
           names: string[];
           start: THREE.Vector3;
           end: THREE.Vector3;
+          proximalMode?: "maxY" | "minX" | "maxX";
         }> = [
+          // Bilateral clavicles (sternal -> acromial)
+          {
+            names: ["left-clavicle"],
+            start: new THREE.Vector3(0.018, 0.635, 0.084),
+            end: new THREE.Vector3(0.19, 0.62, 0.005),
+            proximalMode: "minX",
+          },
+          {
+            names: ["right-clavicle"],
+            start: new THREE.Vector3(-0.018, 0.635, 0.084),
+            end: new THREE.Vector3(-0.19, 0.62, 0.005),
+            proximalMode: "maxX",
+          },
           // Left arm (+X in BioTwin world space)
           {
             names: ["left-humerus"],
@@ -1372,7 +1400,12 @@ export function BioTwin3DStage({
             .map((n) => byName.get(n))
             .filter((m): m is THREE.Mesh => Boolean(m));
           if (meshes.length === 0) continue;
-          const seg = alignBoneSegmentToVector(meshes, spec.start, spec.end);
+          const seg = alignBoneSegmentToVector(
+            meshes,
+            spec.start,
+            spec.end,
+            spec.proximalMode ?? "maxY"
+          );
           if (seg) {
             scene.add(seg);
             addedCount++;
