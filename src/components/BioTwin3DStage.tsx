@@ -1357,40 +1357,40 @@ export function BioTwin3DStage({
           end: THREE.Vector3;
           proximalMode?: "maxY" | "minX" | "maxX";
         }> = [
-          // Bilateral clavicles (sternal -> acromial)
+          // Bilateral clavicles (tucked strictly inside Outer_Body_Shell chest/shoulder bounds)
           {
             names: ["left-clavicle"],
-            start: new THREE.Vector3(0.018, 0.635, 0.084),
-            end: new THREE.Vector3(0.19, 0.62, 0.005),
+            start: new THREE.Vector3(0.022, 0.632, 0.056),
+            end: new THREE.Vector3(0.178, 0.618, -0.014),
             proximalMode: "minX",
           },
           {
             names: ["right-clavicle"],
-            start: new THREE.Vector3(-0.018, 0.635, 0.084),
-            end: new THREE.Vector3(-0.19, 0.62, 0.005),
+            start: new THREE.Vector3(-0.022, 0.632, 0.056),
+            end: new THREE.Vector3(-0.178, 0.618, -0.014),
             proximalMode: "maxX",
           },
-          // Left arm (+X in BioTwin world space)
+          // Left arm (+X in BioTwin world space, centered in Outer_Body_Shell cross-sections)
           {
             names: ["left-humerus"],
-            start: new THREE.Vector3(0.205, 0.575, -0.015),
-            end: new THREE.Vector3(0.311, 0.265, -0.018),
+            start: new THREE.Vector3(0.198, 0.574, -0.022),
+            end: new THREE.Vector3(0.288, 0.265, -0.022),
           },
           {
             names: ["left-radius", "left-ulna"],
-            start: new THREE.Vector3(0.311, 0.265, -0.018),
-            end: new THREE.Vector3(0.468, 0.035, 0.014),
+            start: new THREE.Vector3(0.288, 0.265, -0.022),
+            end: new THREE.Vector3(0.422, 0.048, 0.004),
           },
-          // Right arm (-X in BioTwin world space)
+          // Right arm (-X in BioTwin world space, centered in Outer_Body_Shell cross-sections)
           {
             names: ["right-humerus"],
-            start: new THREE.Vector3(-0.205, 0.575, -0.015),
-            end: new THREE.Vector3(-0.311, 0.265, -0.018),
+            start: new THREE.Vector3(-0.198, 0.574, -0.022),
+            end: new THREE.Vector3(-0.288, 0.265, -0.022),
           },
           {
             names: ["right-radius", "right-ulna"],
-            start: new THREE.Vector3(-0.311, 0.265, -0.018),
-            end: new THREE.Vector3(-0.468, 0.035, 0.014),
+            start: new THREE.Vector3(-0.288, 0.265, -0.022),
+            end: new THREE.Vector3(-0.422, 0.048, 0.004),
           },
         ];
 
