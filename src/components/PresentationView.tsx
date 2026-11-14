@@ -1,17 +1,21 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
   Compass,
+  Activity,
+  Pause,
   RefreshCw,
   RotateCcw,
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { BioTwin3DStage } from "@/components/BioTwin3DStage";
+import { BioTwin3DStage, type FocusProjection } from "@/components/BioTwin3DStage";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
+import { BRIEFING_EXIT_MS, BRIEFING_TRANSITION_MS } from "@/lib/presentationMotion";
 import { PRESENTATION_SLIDES } from "@/data/presentationSlides";
 import type { SpaceWeatherStatus } from "@/lib/nasaApi";
 import { soundEngine } from "@/lib/soundEngine";
@@ -36,47 +40,13 @@ export interface PresentationViewProps {
   spaceWeather: SpaceWeatherStatus | null;
 }
 
-const SCRAMBLE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/+-";
-
-function useScrambleText(targetText: string): string {
-  const [display, setDisplay] = useState(targetText);
-
-  useEffect(() => {
-    const prefersReduced =
-      typeof window !== "undefined" &&
-      Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
-    if (prefersReduced) {
-      setDisplay(targetText);
-      return;
-    }
-
-    let frame = 0;
-    const totalFrames = 10;
-    const timer = window.setInterval(() => {
-      frame += 1;
-      const progress = frame / totalFrames;
-      const resolvedCount = Math.floor(targetText.length * progress);
-      let next = "";
-      for (let i = 0; i < targetText.length; i++) {
-        const ch = targetText[i];
-        if (ch === " " || ch === "&" || ch === "→" || i < resolvedCount) {
-          next += ch;
-        } else {
-          next += SCRAMBLE_CHARS[(i * 7 + frame * 3) % SCRAMBLE_CHARS.length];
-        }
-      }
-      setDisplay(next);
-      if (frame >= totalFrames) {
-        window.clearInterval(timer);
-        setDisplay(targetText);
-      }
-    }, 24);
-
-    return () => window.clearInterval(timer);
-  }, [targetText]);
-
-  return display;
-}
+const CHAPTER_MECHANISM: Record<string, [string, string, string]> = {
+  "neuro-ocular-sans": ["FLUID SHIFT + CO₂", "NEURO-OCULAR LOAD", "GUIDED EYE EXAM"],
+  "cardiovascular-adaptation": ["MICROGRAVITY", "VASCULAR ADAPTATION", "CHECK HR + BP"],
+  "renal-bone-calcium": ["BONE UNLOADING", "RENAL CASCADE", "HYDRATION + ARED"],
+  "radiation-immune": ["SOLAR EXPOSURE", "IMMUNE RESPONSE", "RADIATION REVIEW"],
+  "metabolic-circadian": ["SLEEP + ISOLATION", "METABOLIC DRIFT", "GLUCOSE REVIEW"],
+};
 
 export function PresentationView({
   slideIndex,
@@ -92,35 +62,93 @@ export function PresentationView({
   spaceWeather,
 }: PresentationViewProps) {
   const slide = PRESENTATION_SLIDES[slideIndex] ?? PRESENTATION_SLIDES[0];
-  const [soundOn, setSoundOn] = useState<boolean>(() => soundEngine.isEnabled());
+  const [soundOn, setSoundOn] = useState<boolean>(true);
   const [introOpen, setIntroOpen] = useState<boolean>(true);
+
+  useEffect(() => {
+    setSoundOn(soundEngine.initAutoplay());
+  }, []);
   const [inspectMode, setInspectMode] = useState<boolean>(false);
   const [cameraResetToken, setCameraResetToken] = useState<number>(0);
+  const [sceneCue, setSceneCue] = useState(0);
+  const [introClosing, setIntroClosing] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "leaving" | "entering">("idle");
+  const systemReducedMotion = useReducedMotion();
+  const [motionPreference, setMotionPreference] = useState<"system" | "full" | "reduced">("system");
+  const reducedMotion = motionPreference === "reduced" || (motionPreference === "system" && systemReducedMotion);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const focusRef = useRef<HTMLDivElement>(null);
+  const leaderRef = useRef<SVGPathElement>(null);
+  const transitionLockedRef = useRef(false);
+  const exitTimerRef = useRef<number | null>(null);
+  const settleTimerRef = useRef<number | null>(null);
+  const introTimerRef = useRef<number | null>(null);
+  const pendingSlideRef = useRef<number | null>(null);
+  const navigateRef = useRef<(index: number) => void>(() => {});
+  const mechanism = CHAPTER_MECHANISM[slide.id];
+  const showFocus = !introOpen && !inspectMode && slide.cameraPreset !== "full";
+
+  const finishTransition = useCallback(() => {
+    if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
+    transitionLockedRef.current = false;
+    setPhase("idle");
+    rootRef.current?.style.setProperty("--flight", "1");
+    const pending = pendingSlideRef.current;
+    pendingSlideRef.current = null;
+    if (pending !== null) navigateRef.current(pending);
+  }, []);
+
+  const updateProjection = useCallback((point: FocusProjection) => {
+    if (focusRef.current) {
+      focusRef.current.style.transform = `translate3d(${point.x}px, ${point.y}px, 0)`;
+      focusRef.current.style.visibility = point.visible ? "visible" : "hidden";
+    }
+    if (leaderRef.current) {
+      const startX = point.width >= 1024 ? 297 : 28;
+      const startY = point.height * 0.46;
+      const bendX = Math.max(startX + 24, point.x - 80);
+      leaderRef.current.setAttribute("d", `M ${startX} ${startY} L ${bendX} ${startY} L ${point.x - 35} ${point.y} L ${point.x - 18} ${point.y}`);
+      leaderRef.current.style.visibility = point.visible ? "visible" : "hidden";
+    }
+  }, []);
+  const updateProgress = useCallback((progress: number) => {
+    rootRef.current?.style.setProperty("--flight", String(progress));
+  }, []);
 
   const wheelCooldownUntilRef = useRef<number>(0);
   const wheelGestureConsumedRef = useRef<boolean>(false);
   const wheelIdleTimerRef = useRef<number | null>(null);
-  const scrambledTitle = useScrambleText(slide.title);
+
 
   useEffect(() => {
     return () => {
-      if (wheelIdleTimerRef.current !== null) {
-        window.clearTimeout(wheelIdleTimerRef.current);
+      for (const timer of [wheelIdleTimerRef, exitTimerRef, settleTimerRef, introTimerRef]) {
+        if (timer.current !== null) window.clearTimeout(timer.current);
       }
     };
   }, []);
 
-  function goToSlide(nextIdx: number) {
-    const clamped = Math.max(
-      0,
-      Math.min(PRESENTATION_SLIDES.length - 1, nextIdx)
-    );
+  function goToSlide(nextIdx: number, direct = false) {
+    const clamped = Math.max(0, Math.min(PRESENTATION_SLIDES.length - 1, nextIdx));
     if (clamped === slideIndex) return;
-
+    if (transitionLockedRef.current) {
+      if (direct) pendingSlideRef.current = clamped;
+      return;
+    }
+    transitionLockedRef.current = true;
     setInspectMode(false);
+    setPhase(reducedMotion ? "entering" : "leaving");
+    rootRef.current?.style.setProperty("--flight", "0");
     soundEngine.playCameraWhoosh();
-    onSelectSlide(clamped);
+    exitTimerRef.current = window.setTimeout(() => {
+      onSelectSlide(clamped);
+      setPhase("entering");
+      setSceneCue((value) => value + 1);
+      // An unloaded / unavailable WebGL scene must never strand navigation.
+      settleTimerRef.current = window.setTimeout(finishTransition, reducedMotion ? 80 : BRIEFING_TRANSITION_MS + 300);
+    }, reducedMotion ? 0 : BRIEFING_EXIT_MS);
   }
+  navigateRef.current = (index) => goToSlide(index);
 
   function handlePrimaryCta() {
     soundEngine.playHoverTick();
@@ -136,19 +164,31 @@ export function PresentationView({
     setSoundOn(next);
   }
 
-  function enterBriefing(withAudio: boolean) {
-    if (withAudio && !soundEngine.isEnabled()) {
+  function enterBriefing(withAudio: boolean, animate = true) {
+    // The visitor explicitly chooses the animated experience even when the OS reduces motion.
+    setMotionPreference(animate ? "full" : "reduced");
+    if (withAudio) {
       setSoundOn(soundEngine.setEnabled(true));
     } else {
-      soundEngine.playCameraWhoosh();
+      setSoundOn(soundEngine.setEnabled(false));
     }
-    setIntroOpen(false);
+    if (introClosing) return;
+    setIntroClosing(true);
+    introTimerRef.current = window.setTimeout(() => {
+      setIntroOpen(false);
+      setIntroClosing(false);
+      setSceneCue((value) => value + 1);
+      setPhase("entering");
+      transitionLockedRef.current = true;
+      settleTimerRef.current = window.setTimeout(finishTransition, animate ? BRIEFING_TRANSITION_MS + 300 : 80);
+    }, animate ? 520 : 0);
   }
 
   // Keyboard navigation (Arrow keys / PageUp / PageDown)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
+      if (e.repeat || target?.isContentEditable) return;
       if (
         target &&
         (target.tagName === "INPUT" ||
@@ -174,6 +214,7 @@ export function PresentationView({
         return;
       }
 
+      if (inspectMode) return;
       if (
         e.key === "ArrowRight" ||
         e.key === "ArrowDown" ||
@@ -216,7 +257,7 @@ export function PresentationView({
     }
 
     wheelGestureConsumedRef.current = true;
-    wheelCooldownUntilRef.current = now + 950;
+    wheelCooldownUntilRef.current = now + BRIEFING_EXIT_MS + BRIEFING_TRANSITION_MS;
 
     if (e.deltaY > 0) {
       goToSlide(slideIndex + 1);
@@ -227,8 +268,14 @@ export function PresentationView({
 
   return (
     <div
+      ref={rootRef}
+      data-testid="cinematic-briefing"
+      data-phase={phase}
+      data-motion={reducedMotion ? "reduced" : "full"}
+      data-focus={showFocus ? "true" : "false"}
+      data-slide={slide.id}
       onWheel={handleWheel}
-      className="relative h-screen w-screen overflow-hidden bg-[#06070a] text-white select-none"
+      className="ares-briefing relative h-dvh w-full overflow-hidden bg-[#06070a] text-white select-none"
     >
       {/* Fullscreen 3D Astronaut Stage */}
       <div className="absolute inset-0 z-0">
@@ -240,13 +287,20 @@ export function PresentationView({
           vitals={vitals}
           envTelemetry={envTelemetry}
           visualMode={slide.visualMode}
-          autoRotate={slide.autoRotate && !inspectMode}
+          cinematic={true}
+          sceneCue={sceneCue}
+          inspectEnabled={inspectMode}
+          onFocusProjection={updateProjection}
+          onTransitionProgress={updateProgress}
+          onCameraTransitionEnd={finishTransition}
+          reducedMotionOverride={reducedMotion}
+          autoRotate={false}
           cameraResetToken={cameraResetToken}
           cameraPreset={introOpen || inspectMode ? "full" : slide.cameraPreset}
           enableParallax={!inspectMode}
           allowWheelZoom={inspectMode}
           hideBottomHud={true}
-          calloutFilter={slideIndex === 0 ? "none" : "selected"}
+          calloutFilter={inspectMode ? "selected" : "none"}
         />
       </div>
 
@@ -260,6 +314,18 @@ export function PresentationView({
         }}
       />
 
+      {/* Projected markers stay attached to the moving anatomy, not fixed to a slide. */}
+      <div className="ares-focus-layer pointer-events-none absolute inset-0 z-20" aria-hidden="true">
+        <svg className="ares-leader absolute inset-0 hidden h-full w-full lg:block">
+          <path ref={leaderRef} fill="none" stroke="currentColor" strokeWidth="0.8" pathLength="1" />
+        </svg>
+        <div ref={focusRef} className="ares-focus-anchor absolute left-0 top-0">
+          <div key={`${slide.id}-reticle`} className="ares-focus-brackets" />
+          <span className="ares-focus-tag font-mono">{slide.chapterLabel} <span> / {slide.visualMode.toUpperCase()}</span></span>
+        </div>
+      </div>
+      <div className="ares-flight-track pointer-events-none absolute inset-x-0 top-0 z-30" aria-hidden="true"><span /></div>
+
       {/* Top Architectural Frame Bar (28px unified HUD margin) */}
       <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center justify-between px-5 py-5 sm:px-7 sm:py-7">
         {/* Brand */}
@@ -269,7 +335,7 @@ export function PresentationView({
             setCameraResetToken((n) => n + 1);
             goToSlide(0);
           }}
-          className="pointer-events-auto flex items-center gap-2.5 text-left transition opacity-90 hover:opacity-100"
+          className="pointer-events-auto flex shrink-0 items-center gap-2.5 whitespace-nowrap text-left transition opacity-90 hover:opacity-100"
         >
           <svg
             viewBox="0 0 32 32"
@@ -295,6 +361,19 @@ export function PresentationView({
 
         {/* Top-Right Inspect Toggle + Console Action */}
         <div className="pointer-events-auto flex items-center gap-2">
+          <button
+            type="button"
+            aria-label={reducedMotion ? "Enable full animation" : "Reduce animation"}
+            aria-pressed={!reducedMotion}
+            onClick={() => {
+              setMotionPreference(reducedMotion ? "full" : "reduced");
+              if (!reducedMotion) finishTransition();
+            }}
+            className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.06] px-3 font-mono text-[10px] tracking-[0.12em] text-white/70 backdrop-blur-md transition hover:border-white/35 hover:text-white"
+          >
+            {reducedMotion ? <Pause className="h-3.5 w-3.5" aria-hidden="true" /> : <Activity className="h-3.5 w-3.5 text-sky-300" aria-hidden="true" />}
+            <span className="hidden lg:inline">{reducedMotion ? "REDUCED MOTION" : "MOTION ON"}</span>
+          </button>
           {inspectMode && (
             <button
               type="button"
@@ -310,6 +389,7 @@ export function PresentationView({
           )}
           <button
             type="button"
+            aria-label={inspectMode ? "Return to briefing" : "Inspect 3D model"}
             onClick={() => {
               soundEngine.playHoverTick();
               setInspectMode((prev) => !prev);
@@ -321,7 +401,7 @@ export function PresentationView({
             }`}
           >
             <Compass className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>{inspectMode ? "BRIEFING" : "INSPECT 3D"}</span>
+            <span className="hidden sm:inline">{inspectMode ? "BRIEFING" : "INSPECT 3D"}</span>
           </button>
           <button
             type="button"
@@ -331,7 +411,7 @@ export function PresentationView({
             }}
             className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-white/25 bg-white/10 px-4 font-mono text-[10px] font-semibold tracking-[0.18em] text-white backdrop-blur-md transition hover:border-white hover:bg-white hover:text-[#06070a]"
           >
-            <span>CMO CONSOLE</span>
+            <span className="hidden sm:inline">CMO CONSOLE</span><span className="sm:hidden">CMO</span>
             <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
         </div>
@@ -343,7 +423,7 @@ export function PresentationView({
           key={`${slide.id}-summary`}
           aria-label="Diagnostic Summary"
           style={{ animationDelay: "260ms" }}
-          className="ares-choreo-enter pointer-events-auto absolute top-1/2 left-5 z-30 hidden w-[268px] -translate-y-1/2 flex-col gap-2.5 sm:left-7 lg:flex"
+          className="ares-telemetry ares-choreo-enter pointer-events-auto absolute top-1/2 left-5 z-30 hidden w-[268px] -translate-y-1/2 flex-col gap-2.5 sm:left-7 lg:flex"
         >
           <div className="flex items-center justify-between font-mono text-[9.5px] tracking-[0.18em] text-white/45">
             <span>DIAGNOSTIC SUMMARY</span>
@@ -440,8 +520,9 @@ export function PresentationView({
       ) : (
         slideIndex > 0 && (
         <aside
+          key={`${slide.id}-telemetry`}
           aria-label="Slide Telemetry Comparison"
-          className="pointer-events-auto absolute top-1/2 left-5 z-30 hidden w-[268px] -translate-y-1/2 flex-col gap-2.5 sm:left-7 lg:flex"
+          className="ares-telemetry pointer-events-auto absolute top-1/2 left-5 z-30 hidden w-[268px] -translate-y-1/2 flex-col gap-2.5 sm:left-7 lg:flex"
         >
           <div className="flex items-center justify-between font-mono text-[9.5px] tracking-[0.18em] text-white/45">
             <span>EARTH VS SPACE</span>
@@ -451,7 +532,7 @@ export function PresentationView({
           {slide.metrics.map((metric, idx) => (
             <div
               key={`${slide.id}-${metric.label}`}
-              style={{ animationDelay: `${240 + idx * 100}ms` }}
+              style={{ animationDelay: `${650 + idx * 140}ms` }}
               className="ares-choreo-enter rounded-xl border border-white/12 bg-[#060a12]/48 p-3.5 backdrop-blur-md transition-colors duration-200 hover:border-white/28"
             >
               <div className="flex items-center justify-between gap-2">
@@ -492,6 +573,22 @@ export function PresentationView({
             </div>
           ))}
 
+          {mechanism && (
+            <div key={`${slide.id}-mechanism`} className="ares-mechanism rounded-xl border border-white/10 bg-[#060a12]/60 p-3.5 backdrop-blur-md">
+              <span className="font-mono text-[9px] tracking-[0.18em] text-white/35">CASCADE / DEMO SCENARIO</span>
+              {mechanism.map((step, index) => (
+                <div key={step} className="ares-mechanism-step mt-2 flex items-center gap-2 font-mono text-[9px] tracking-wider" style={{ animationDelay: `${1050 + index * 150}ms` }}>
+                  <span className="text-sky-300/45">0{index + 1}</span><span className={index === 2 ? "text-sky-200" : "text-white/70"}>{step}</span>
+                </div>
+              ))}
+              {slide.id === "cardiovascular-adaptation" && (
+                <div className="ares-pulse mt-3" style={{ "--beat": `${60 / Math.max(30, vitals.heartRateBpm)}s` } as React.CSSProperties}>
+                  <svg viewBox="0 0 220 30" aria-hidden="true"><path d="M0 18 H32 L37 15 L42 18 H65 L70 21 L76 3 L83 27 L89 18 H118 L125 13 L133 18 H220" /></svg>
+                  <span className="mt-1 block font-mono text-[8px] tracking-wider text-white/35">HR-SYNCED ILLUSTRATION · {vitals.heartRateBpm} BPM</span>
+                </div>
+              )}
+            </div>
+          )}
           {slide.id === "radiation-immune" && (
             <button
               type="button"
@@ -527,10 +624,10 @@ export function PresentationView({
             <button
               key={item.id}
               type="button"
-              onClick={() => goToSlide(idx)}
+              onClick={() => goToSlide(idx, true)}
               onMouseEnter={() => soundEngine.playHoverTick()}
               aria-current={isActive ? "step" : undefined}
-              className="group flex cursor-pointer items-center justify-end gap-3 text-right transition"
+              className="ares-chapter group flex cursor-pointer items-center justify-end gap-3 text-right transition"
             >
               <span
                 className={`font-mono text-[10px] tracking-[0.2em] transition-colors ${
@@ -556,15 +653,15 @@ export function PresentationView({
       {/* Bottom Center Slide Headline & CTA (Hubtown Hero Placement) */}
       <section
         key={`${slide.id}-hero`}
-        style={{ animationDelay: "160ms" }}
-        className="ares-choreo-enter pointer-events-none absolute inset-x-0 bottom-14 z-30 mx-auto flex max-w-2xl flex-col items-center px-5 text-center sm:bottom-12"
+        style={{ animationDelay: "300ms" }}
+        className="ares-hero ares-choreo-enter pointer-events-none absolute inset-x-0 bottom-14 z-30 mx-auto flex max-w-2xl flex-col items-center px-5 text-center sm:bottom-12"
       >
         <span className="font-mono text-[10px] tracking-[0.24em] text-sky-300/90">
           {slide.kicker}
         </span>
 
-        <h1 className="mt-2.5 text-2xl font-semibold tracking-[0.06em] text-white text-balance sm:text-4xl lg:text-[42px] lg:leading-[1.08]">
-          {scrambledTitle}
+        <h1 className="ares-scan-title pointer-events-auto mt-2.5 text-2xl font-semibold tracking-[0.06em] text-white text-balance sm:text-4xl lg:text-[42px] lg:leading-[1.08]">
+          {slide.title}
         </h1>
 
         <p className="mt-2.5 max-w-xl text-xs leading-relaxed text-white/65 text-balance sm:text-sm">
@@ -633,7 +730,8 @@ export function PresentationView({
 
       {/* Intro Portal Gate (Active Theory Style) */}
       {introOpen && (
-        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-[#06070a]/75 px-6 text-center backdrop-blur-md transition-opacity duration-500">
+        <div role="dialog" aria-modal="true" aria-label="Start mission briefing" data-closing={introClosing} className="ares-intro absolute inset-0 z-40 flex flex-col items-center justify-center bg-[#06070a]/65 px-6 text-center backdrop-blur-md">
+          <div className="ares-boot-orbit" aria-hidden="true"><span /><span /></div>
           <span className="font-mono text-[10px] tracking-[0.28em] text-sky-300/85">
             NASA SPACE APPS CHALLENGE 2026 // ALMATY
           </span>
@@ -652,16 +750,19 @@ export function PresentationView({
               className="inline-flex h-11 cursor-pointer items-center gap-2.5 rounded-lg bg-white px-6 font-mono text-[11px] font-semibold tracking-[0.18em] text-[#06070a] transition hover:bg-sky-100 active:scale-[0.98]"
             >
               <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>ENTER WITH AUDIO</span>
+              <span>PLAY ANIMATED BRIEFING</span>
             </button>
             <button
               type="button"
               onClick={() => enterBriefing(false)}
               className="inline-flex h-11 cursor-pointer items-center gap-2 rounded-lg border border-white/20 bg-white/[0.06] px-5 font-mono text-[11px] font-medium tracking-[0.18em] text-white/85 transition hover:border-white/40 hover:text-white"
             >
-              <span>SILENT MODE</span>
+              <span>PLAY SILENT</span>
             </button>
           </div>
+          <button type="button" onClick={() => enterBriefing(false, false)} className="mt-5 font-mono text-[9px] tracking-[0.14em] text-white/45 underline-offset-4 hover:text-white hover:underline">
+            USE REDUCED MOTION
+          </button>
         </div>
       )}
     </div>

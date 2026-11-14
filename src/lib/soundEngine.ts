@@ -6,8 +6,7 @@
 
 const BG_PLAYLIST = [
   "/audio/dark-soul.m4a",
-  "/audio/cyberpunk.m4a",
-  "/audio/humanity.m4a",
+  "/audio/deep-techno-ambience.mp3",
 ];
 
 class AresSoundEngine {
@@ -20,6 +19,7 @@ class AresSoundEngine {
   private bgTrackIndex = 0;
   private bgFadeTimer: number | null = null;
   private bgUnavailable = false;
+  private unlockHandler: (() => void) | null = null;
 
   private ensureContext(): AudioContext | null {
     if (typeof window === "undefined") return null;
@@ -41,22 +41,54 @@ class AresSoundEngine {
     return this.enabled;
   }
 
+  public initAutoplay(): boolean {
+    if (typeof window === "undefined") return false;
+    if (this.enabled) return true;
+    this.enabled = true;
+    this.startBackgroundOrAmbient(true);
+    return true;
+  }
+
+  private clearAutoplayUnlock(): void {
+    if (typeof window === "undefined" || !this.unlockHandler) return;
+    for (const evt of ["pointerdown", "keydown", "touchstart", "wheel"] as const) {
+      window.removeEventListener(evt, this.unlockHandler, true);
+    }
+    this.unlockHandler = null;
+  }
+
+  private armAutoplayUnlock(): void {
+    if (typeof window === "undefined" || this.unlockHandler) return;
+    this.unlockHandler = () => {
+      this.clearAutoplayUnlock();
+      if (this.enabled) {
+        this.startBackgroundOrAmbient(false);
+      }
+    };
+    for (const evt of ["pointerdown", "keydown", "touchstart", "wheel"] as const) {
+      window.addEventListener(evt, this.unlockHandler, { capture: true, passive: true });
+    }
+  }
+
   public setEnabled(next: boolean): boolean {
     this.enabled = next;
     if (next) {
-      this.startBackgroundOrAmbient();
+      this.clearAutoplayUnlock();
+      this.startBackgroundOrAmbient(false);
       this.playHoverTick();
     } else {
+      this.clearAutoplayUnlock();
       this.stopBgAudio();
       this.stopAmbient();
     }
     return this.enabled;
   }
 
-  private startBackgroundOrAmbient(): void {
+  private startBackgroundOrAmbient(fromAutoplay = false): void {
     if (typeof window === "undefined") return;
     if (this.bgUnavailable) {
-      this.startAmbient();
+      if (!fromAutoplay) this.startAmbient();
+      else this.armAutoplayUnlock();
       return;
     }
 
@@ -86,10 +118,14 @@ class AresSoundEngine {
       .play()
       .then(() => {
         if (!this.enabled) return;
+        this.clearAutoplayUnlock();
         this.fadeAudioTo(audio, 0.24, 900);
       })
       .catch(() => {
-        if (this.enabled) {
+        if (!this.enabled) return;
+        if (fromAutoplay) {
+          this.armAutoplayUnlock();
+        } else {
           this.startAmbient();
         }
       });
