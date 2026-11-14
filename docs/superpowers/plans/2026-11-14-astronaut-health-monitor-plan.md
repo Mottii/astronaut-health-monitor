@@ -116,19 +116,19 @@
   - `parseDonkiFlareClass(classType?: string): SolarFlareClass`
   - `fetchSpaceWeatherAlert(fetchImpl?: typeof fetch): Promise<SpaceWeatherStatus>`
 
-- [ ] **Step 1: Write failing tests in `src/lib/__tests__/nasaApi.test.ts`**
+- [x] **Step 1: Write failing tests in `src/lib/__tests__/nasaApi.test.ts`**
   Test cases to assert:
   1. `parseDonkiFlareClass('M3.4')` returns `'M'`; `'X1.2'` returns `'X'`; `'C2.1'` returns `'C'`; undefined/empty returns `'None'`.
   2. Mocked `fetchImpl` returning a DONKI array with `[{ classType: 'M4.2', peakTime: '2026-11-14T03:15Z' }]` resolves with `source: 'nasa_donki_live'`, `flareClass: 'M'`, `isFallback: false`, and `recommendedDoseModifierMsv > 0`.
   3. Mocked `fetchImpl` returning HTTP `429` or rejecting with network timeout error resolves gracefully (never rejects) with `source: 'osdr_radlab_fallback'` and `isFallback: true`.
   4. Mocked `fetchImpl` returning empty JSON `[]` resolves with `source: 'nasa_donki_live'`, `flareClass: 'None'`, `recommendedDoseModifierMsv: 0`.
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
   Run: `npx vitest run src/lib/__tests__/nasaApi.test.ts` -> Expected: FAIL.
-- [ ] **Step 3: Implement `parseDonkiFlareClass` and `fetchSpaceWeatherAlert` in `src/lib/nasaApi.ts`**
+- [x] **Step 3: Implement `parseDonkiFlareClass` and `fetchSpaceWeatherAlert` in `src/lib/nasaApi.ts`**
   Query `https://api.nasa.gov/DONKI/FLR` (last 7 days, `api_key=DEMO_KEY`) with `AbortController` timeout (`3500ms`), parse strongest recent flare class (`X > M > C > None`), and return deterministic OSDR RadLab fallback metadata on error/timeout.
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
   Run: `npx vitest run src/lib/__tests__/nasaApi.test.ts` -> Expected: PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   ```bash
   git add src/lib/nasaApi.ts src/lib/__tests__/nasaApi.test.ts
   git commit -m "feat: add NASA DONKI live space weather service with OSDR fallback"
