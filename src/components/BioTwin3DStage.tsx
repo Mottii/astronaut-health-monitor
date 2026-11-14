@@ -1064,6 +1064,109 @@ export function BioTwin3DStage({
 
     // Load Blender-exported multi-layer clinical GLB
     let disposed = false;
+    let skeletalFrameMesh: THREE.Mesh | null = null;
+    let armBonesLoaded = false;
+
+    const stripProceduralArmTubes = (geometry: THREE.BufferGeometry) => {
+      const pos = geometry.getAttribute("position");
+      if (!pos) return;
+      const idx = geometry.getIndex();
+      const isArmTri = (a: number, b: number, c: number) => {
+        const cx = (pos.getX(a) + pos.getX(b) + pos.getX(c)) / 3;
+        const cy = (pos.getY(a) + pos.getY(b) + pos.getY(c)) / 3;
+        return Math.abs(cx) > 0.205 && cy < 0.59;
+      };
+      if (idx) {
+        const kept: number[] = [];
+        for (let i = 0; i < idx.count; i += 3) {
+          const a = idx.getX(i);
+          const b = idx.getX(i + 1);
+          const c = idx.getX(i + 2);
+          if (!isArmTri(a, b, c)) {
+            kept.push(a, b, c);
+          }
+        }
+        geometry.setIndex(kept);
+      }
+    };
+
+    const alignBoneSegmentToVector = (
+      meshes: THREE.Mesh[],
+      targetStart: THREE.Vector3,
+      targetEnd: THREE.Vector3
+    ) => {
+      let minY = Infinity;
+      let maxY = -Infinity;
+      for (const m of meshes) {
+        m.updateMatrixWorld(true);
+        const pos = m.geometry.getAttribute("position");
+        if (!pos) continue;
+        const v = new THREE.Vector3();
+        for (let i = 0; i < pos.count; i++) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+          if (v.y < minY) minY = v.y;
+          if (v.y > maxY) maxY = v.y;
+        }
+      }
+      const span = Math.max(0.001, maxY - minY);
+      const topThresh = maxY - span * 0.12;
+      const botThresh = minY + span * 0.12;
+      const prox = new THREE.Vector3();
+      const dist = new THREE.Vector3();
+      let proxCount = 0;
+      let distCount = 0;
+      const v = new THREE.Vector3();
+
+      for (const m of meshes) {
+        const pos = m.geometry.getAttribute("position");
+        if (!pos) continue;
+        for (let i = 0; i < pos.count; i++) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+          if (v.y >= topThresh) {
+            prox.add(v);
+            proxCount++;
+          } else if (v.y <= botThresh) {
+            dist.add(v);
+            distCount++;
+          }
+        }
+      }
+      if (proxCount === 0 || distCount === 0) return null;
+      prox.divideScalar(proxCount);
+      dist.divideScalar(distCount);
+
+      const boneVec = dist.clone().sub(prox);
+      const targetVec = targetEnd.clone().sub(targetStart);
+      if (boneVec.lengthSq() < 1e-6) return null;
+
+      const scaleFactor = targetVec.length() / boneVec.length();
+      const quat = new THREE.Quaternion().setFromUnitVectors(
+        boneVec.clone().normalize(),
+        targetVec.clone().normalize()
+      );
+
+      const group = new THREE.Group();
+      for (const m of meshes) {
+        m.geometry.applyMatrix4(m.matrixWorld);
+        m.position.set(0, 0, 0);
+        m.rotation.set(0, 0, 0);
+        m.scale.set(1, 1, 1);
+        m.updateMatrix();
+        m.material = skeletonMaterial;
+        m.renderOrder = 2;
+        group.add(m);
+      }
+
+      group.scale.setScalar(scaleFactor);
+      group.quaternion.copy(quat);
+      const transformedProx = prox
+        .clone()
+        .multiplyScalar(scaleFactor)
+        .applyQuaternion(quat);
+      group.position.copy(targetStart).sub(transformedProx);
+      return group;
+    };
+
     const loader = new GLTFLoader();
     loader.load(
       "/models/ares-biotwin.glb",
@@ -1131,6 +1234,10 @@ export function BioTwin3DStage({
           if (obj.name === "Skeletal_Frame") {
             obj.material = skeletonMaterial;
             obj.renderOrder = 2;
+            skeletalFrameMesh = obj;
+            if (armBonesLoaded) {
+              stripProceduralArmTubes(obj.geometry);
+            }
             scene.add(obj);
             continue;
           }
@@ -1212,6 +1319,76 @@ export function BioTwin3DStage({
       undefined,
       () => {
         if (!disposed) setLoadState("error");
+      }
+    );
+
+    // Replace procedural arm tubes with real anatomical humerus, radius & ulna bones aligned to body pose
+    loader.load(
+      "/models/skeleton.glb",
+      (gltf) => {
+        if (disposed) return;
+        const root = gltf.scene;
+        root.updateMatrixWorld(true);
+
+        const byName = new Map<string, THREE.Mesh>();
+        root.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            byName.set(obj.name, obj);
+          }
+        });
+
+        const armSpecs: Array<{
+          names: string[];
+          start: THREE.Vector3;
+          end: THREE.Vector3;
+        }> = [
+          // Left arm (+X in BioTwin world space)
+          {
+            names: ["left-humerus"],
+            start: new THREE.Vector3(0.205, 0.575, -0.015),
+            end: new THREE.Vector3(0.311, 0.265, -0.018),
+          },
+          {
+            names: ["left-radius", "left-ulna"],
+            start: new THREE.Vector3(0.311, 0.265, -0.018),
+            end: new THREE.Vector3(0.468, 0.035, 0.014),
+          },
+          // Right arm (-X in BioTwin world space)
+          {
+            names: ["right-humerus"],
+            start: new THREE.Vector3(-0.205, 0.575, -0.015),
+            end: new THREE.Vector3(-0.311, 0.265, -0.018),
+          },
+          {
+            names: ["right-radius", "right-ulna"],
+            start: new THREE.Vector3(-0.311, 0.265, -0.018),
+            end: new THREE.Vector3(-0.468, 0.035, 0.014),
+          },
+        ];
+
+        let addedCount = 0;
+        for (const spec of armSpecs) {
+          const meshes = spec.names
+            .map((n) => byName.get(n))
+            .filter((m): m is THREE.Mesh => Boolean(m));
+          if (meshes.length === 0) continue;
+          const seg = alignBoneSegmentToVector(meshes, spec.start, spec.end);
+          if (seg) {
+            scene.add(seg);
+            addedCount++;
+          }
+        }
+
+        if (addedCount > 0) {
+          armBonesLoaded = true;
+          if (skeletalFrameMesh) {
+            stripProceduralArmTubes(skeletalFrameMesh.geometry);
+          }
+        }
+      },
+      undefined,
+      () => {
+        // Keep procedural arm tubes silently if skeleton.glb is unavailable
       }
     );
 
