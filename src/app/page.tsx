@@ -974,6 +974,13 @@ export default function HomePage() {
                 <FlaskConical className="h-3 w-3 text-[#a1a1aa]" aria-hidden="true" />
                 <span>Pre-Flight</span>
               </Link>
+              <Link
+                href="/orbital"
+                title="Open Orbital Ascent 3D Experience (Earth to ISS)"
+                className="inline-flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-sky-400/25 bg-sky-400/10 px-2.5 text-[10.5px] font-medium text-sky-200 transition hover:border-sky-300/50 hover:bg-sky-400/20 hover:text-white"
+              >
+                <span>Orbital 3D</span>
+              </Link>
             </div>
           </div>
 
