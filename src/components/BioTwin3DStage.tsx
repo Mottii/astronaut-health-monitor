@@ -54,6 +54,8 @@ export interface BioTwin3DStageProps {
   hideBottomHud?: boolean;
   /** Control which 3D organ callout pills are visible */
   calloutFilter?: "all" | "selected" | "none";
+  /** Callback fired when a timed camera fly-to transition finishes */
+  onCameraTransitionEnd?: () => void;
 }
 
 interface ParsedSubStructure {
@@ -410,13 +412,9 @@ const CINEMA_POST_SHADER = {
     }
 
     void main() {
-      vec2 offset = (vUv - 0.5) * 0.0022;
-      float r = texture2D(tDiffuse, vUv + offset).r;
-      float g = texture2D(tDiffuse, vUv).g;
-      float b = texture2D(tDiffuse, vUv - offset).b;
-      vec3 col = vec3(r, g, b);
+      vec3 col = texture2D(tDiffuse, vUv).rgb;
 
-      float grain = (rand(vUv + fract(uTime)) - 0.5) * 0.028;
+      float grain = (rand(vUv + fract(uTime)) - 0.5) * 0.008;
       col += grain;
 
       gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
@@ -509,6 +507,7 @@ export function BioTwin3DStage({
   allowWheelZoom = true,
   hideBottomHud = false,
   calloutFilter = "all",
+  onCameraTransitionEnd,
 }: BioTwin3DStageProps) {
   const effectiveMode: ClinicalVisualMode =
     visualMode ?? (xrayIntensity === "deep" ? "xray" : "atlas");
@@ -562,12 +561,21 @@ export function BioTwin3DStage({
   cascadesRef.current = cascades;
   const rebuildCascadesRef = useRef<(() => void) | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const onCameraTransitionEndRef = useRef(onCameraTransitionEnd);
+  onCameraTransitionEndRef.current = onCameraTransitionEnd;
   const enableParallaxRef = useRef(enableParallax);
   enableParallaxRef.current = enableParallax;
   const calloutFilterRef = useRef(calloutFilter);
   calloutFilterRef.current = calloutFilter;
   const cameraPresetRef = useRef(cameraPreset);
   cameraPresetRef.current = cameraPreset;
+
+  const prefersReducedMotion =
+    typeof window !== "undefined" &&
+    Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+  const reducedMotionRef = useRef(prefersReducedMotion);
+  reducedMotionRef.current = prefersReducedMotion;
 
   useEffect(() => {
     setClickedInfo((prev) =>
@@ -577,17 +585,48 @@ export function BioTwin3DStage({
     );
   }, [selectedSystem]);
 
-  // Camera transition state (skip auto fly-to on very first mount so user sees full body)
+  // Camera transition state (deterministic 1.15s cubic ease-in-out timeline)
   const mountedSelectionRef = useRef(false);
   const flyRef = useRef<{
     active: boolean;
+    elapsed: number;
+    duration: number;
+    startPos: THREE.Vector3;
+    startLook: THREE.Vector3;
     targetPos: THREE.Vector3;
     targetLook: THREE.Vector3;
   }>({
     active: false,
+    elapsed: 0,
+    duration: 1.15,
+    startPos: FULL_BODY_VIEW.position.clone(),
+    startLook: FULL_BODY_VIEW.target.clone(),
     targetPos: FULL_BODY_VIEW.position.clone(),
     targetLook: FULL_BODY_VIEW.target.clone(),
   });
+
+  const startCameraFly = (targetPos: THREE.Vector3, targetLook: THREE.Vector3) => {
+    const cam = cameraRef.current;
+    const ctrl = controlsRef.current;
+    if (reducedMotionRef.current && cam && ctrl) {
+      cam.position.copy(targetPos);
+      ctrl.target.copy(targetLook);
+      ctrl.update();
+      flyRef.current.active = false;
+      onCameraTransitionEndRef.current?.();
+      return;
+    }
+
+    flyRef.current = {
+      active: true,
+      elapsed: 0,
+      duration: 1.15,
+      startPos: cam ? cam.position.clone() : flyRef.current.targetPos.clone(),
+      startLook: ctrl ? ctrl.target.clone() : flyRef.current.targetLook.clone(),
+      targetPos: targetPos.clone(),
+      targetLook: targetLook.clone(),
+    };
+  };
 
   // Trigger camera fly-to when user changes selectedSystem after mount
   useEffect(() => {
@@ -596,21 +635,13 @@ export function BioTwin3DStage({
       return;
     }
     const view = ORGAN_CAMERA_VIEWS[selectedSystem] ?? FULL_BODY_VIEW;
-    flyRef.current = {
-      active: true,
-      targetPos: view.position.clone(),
-      targetLook: view.target.clone(),
-    };
+    startCameraFly(view.position, view.target);
   }, [selectedSystem]);
 
   // Trigger full-body camera reset when cameraResetToken increments
   useEffect(() => {
     if (cameraResetToken === 0) return;
-    flyRef.current = {
-      active: true,
-      targetPos: FULL_BODY_VIEW.position.clone(),
-      targetLook: FULL_BODY_VIEW.target.clone(),
-    };
+    startCameraFly(FULL_BODY_VIEW.position, FULL_BODY_VIEW.target);
   }, [cameraResetToken]);
 
   // Explicit camera preset override (used by presentation slides)
@@ -620,11 +651,7 @@ export function BioTwin3DStage({
       cameraPreset === "full"
         ? FULL_BODY_VIEW
         : (ORGAN_CAMERA_VIEWS[cameraPreset] ?? FULL_BODY_VIEW);
-    flyRef.current = {
-      active: true,
-      targetPos: view.position.clone(),
-      targetLook: view.target.clone(),
-    };
+    startCameraFly(view.position, view.target);
   }, [cameraPreset]);
 
   // Sync wheel zoom permission without re-initializing WebGL
@@ -671,6 +698,7 @@ export function BioTwin3DStage({
 
     const camera = new THREE.PerspectiveCamera(38, width / height, 0.05, 30);
     camera.position.copy(FULL_BODY_VIEW.position);
+    cameraRef.current = camera;
 
     const composer = new EffectComposer(renderer);
     composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -1606,25 +1634,42 @@ export function BioTwin3DStage({
 
     const animate = () => {
       rafId = requestAnimationFrame(animate);
+      if (typeof document !== "undefined" && document.hidden) {
+        clock.getDelta();
+        return;
+      }
+
       const dt = Math.min(clock.getDelta(), 0.05);
-      const t = clock.elapsedTime;
+      const t = reducedMotionRef.current ? 0 : clock.elapsedTime;
       const snapshot = liveRef.current;
 
-      // Update camera fly-to interpolation or OrbitControls autoRotate
+      // Update camera fly-to timeline (cubic ease-in-out without spring overshoot)
       if (flyRef.current.active) {
-        const lerpAlpha = 1 - Math.exp(-5.5 * dt);
-        camera.position.lerp(flyRef.current.targetPos, lerpAlpha);
-        controls.target.lerp(flyRef.current.targetLook, lerpAlpha);
-        if (
-          camera.position.distanceTo(flyRef.current.targetPos) < 0.008 &&
-          controls.target.distanceTo(flyRef.current.targetLook) < 0.008
-        ) {
+        flyRef.current.elapsed += dt;
+        const u = Math.min(1, flyRef.current.elapsed / flyRef.current.duration);
+        const eased =
+          u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+        camera.position.lerpVectors(
+          flyRef.current.startPos,
+          flyRef.current.targetPos,
+          eased
+        );
+        controls.target.lerpVectors(
+          flyRef.current.startLook,
+          flyRef.current.targetLook,
+          eased
+        );
+        if (u >= 1) {
           flyRef.current.active = false;
+          onCameraTransitionEndRef.current?.();
         }
       }
 
-      controls.autoRotate = snapshot.autoRotate && !flyRef.current.active;
-      controls.autoRotateSpeed = 0.85;
+      controls.autoRotate =
+        snapshot.autoRotate &&
+        !flyRef.current.active &&
+        !reducedMotionRef.current;
+      controls.autoRotateSpeed = 0.72;
       controls.update();
 
       // Update Outer Shell Fresnel shader + skeletal opacity from active clinical viewing mode

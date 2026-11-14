@@ -616,15 +616,17 @@ export default function HomePage() {
     const slide = PRESENTATION_SLIDES[nextIndex];
     if (!slide) return;
     setSlideIndex(nextIndex);
-    setTelemetryMode("preset");
-    const scenario = DEMO_SCENARIOS.find((s) => s.id === slide.scenarioId);
-    if (scenario) {
-      setActiveScenarioId(scenario.id);
-      setEnvId(scenario.environmentId);
-      setPresetVitals(scenario.vitals);
-      setPresetEnv(scenario.envTelemetry);
-      setCountermeasureVitalsPatch({});
-      setCountermeasureEnvPatch({});
+    if (!slide.preserveActiveScenario) {
+      setTelemetryMode("preset");
+      const scenario = DEMO_SCENARIOS.find((s) => s.id === slide.scenarioId);
+      if (scenario) {
+        setActiveScenarioId(scenario.id);
+        setEnvId(scenario.environmentId);
+        setPresetVitals(scenario.vitals);
+        setPresetEnv(scenario.envTelemetry);
+        setCountermeasureVitalsPatch({});
+        setCountermeasureEnvPatch({});
+      }
     }
     setSelectedSystem(slide.focusSystem);
   }

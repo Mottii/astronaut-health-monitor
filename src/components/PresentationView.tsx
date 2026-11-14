@@ -5,7 +5,9 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
+  Compass,
   RefreshCw,
+  RotateCcw,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -40,8 +42,16 @@ function useScrambleText(targetText: string): string {
   const [display, setDisplay] = useState(targetText);
 
   useEffect(() => {
+    const prefersReduced =
+      typeof window !== "undefined" &&
+      Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+    if (prefersReduced) {
+      setDisplay(targetText);
+      return;
+    }
+
     let frame = 0;
-    const totalFrames = 14;
+    const totalFrames = 10;
     const timer = window.setInterval(() => {
       frame += 1;
       const progress = frame / totalFrames;
@@ -84,10 +94,21 @@ export function PresentationView({
   const slide = PRESENTATION_SLIDES[slideIndex] ?? PRESENTATION_SLIDES[0];
   const [soundOn, setSoundOn] = useState<boolean>(() => soundEngine.isEnabled());
   const [introOpen, setIntroOpen] = useState<boolean>(true);
+  const [inspectMode, setInspectMode] = useState<boolean>(false);
   const [cameraResetToken, setCameraResetToken] = useState<number>(0);
 
-  const lastWheelAtRef = useRef<number>(0);
+  const wheelCooldownUntilRef = useRef<number>(0);
+  const wheelGestureConsumedRef = useRef<boolean>(false);
+  const wheelIdleTimerRef = useRef<number | null>(null);
   const scrambledTitle = useScrambleText(slide.title);
+
+  useEffect(() => {
+    return () => {
+      if (wheelIdleTimerRef.current !== null) {
+        window.clearTimeout(wheelIdleTimerRef.current);
+      }
+    };
+  }, []);
 
   function goToSlide(nextIdx: number) {
     const clamped = Math.max(
@@ -96,11 +117,8 @@ export function PresentationView({
     );
     if (clamped === slideIndex) return;
 
-    const nextSlide = PRESENTATION_SLIDES[clamped];
+    setInspectMode(false);
     soundEngine.playCameraWhoosh();
-    if (nextSlide.metrics.some((m) => m.critical)) {
-      window.setTimeout(() => soundEngine.playAlertPulse(), 180);
-    }
     onSelectSlide(clamped);
   }
 
@@ -127,7 +145,7 @@ export function PresentationView({
     setIntroOpen(false);
   }
 
-  // Keyboard navigation (Arrow keys / Space)
+  // Keyboard navigation (Arrow keys / PageUp / PageDown)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -142,22 +160,38 @@ export function PresentationView({
 
       if (introOpen) {
         if (e.key === "Enter" || e.key === " ") {
+          if (target?.tagName === "BUTTON") return;
           e.preventDefault();
           enterBriefing(false);
         }
         return;
       }
 
-      if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === " ") {
+      if (e.key === "Escape" && inspectMode) {
         e.preventDefault();
-        if (slideIndex >= PRESENTATION_SLIDES.length - 1) {
-          onOpenConsole();
-        } else {
-          goToSlide(slideIndex + 1);
-        }
-      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        setInspectMode(false);
+        setCameraResetToken((n) => n + 1);
+        return;
+      }
+
+      if (
+        e.key === "ArrowRight" ||
+        e.key === "ArrowDown" ||
+        e.key === "PageDown"
+      ) {
+        e.preventDefault();
+        goToSlide(slideIndex + 1);
+      } else if (
+        e.key === "ArrowLeft" ||
+        e.key === "ArrowUp" ||
+        e.key === "PageUp"
+      ) {
         e.preventDefault();
         goToSlide(slideIndex - 1);
+      } else if (e.key === " ") {
+        if (target?.tagName === "BUTTON" || target?.tagName === "A") return;
+        e.preventDefault();
+        goToSlide(slideIndex + 1);
       }
     };
 
@@ -165,13 +199,24 @@ export function PresentationView({
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
-  // Wheel navigation with smooth cooldown
+  // Trackpad-safe wheel navigation: one gesture = max one slide transition
   function handleWheel(e: React.WheelEvent<HTMLDivElement>) {
-    if (introOpen) return;
-    if (Math.abs(e.deltaY) < 28) return;
+    if (introOpen || inspectMode) return;
+    if (wheelIdleTimerRef.current !== null) {
+      window.clearTimeout(wheelIdleTimerRef.current);
+    }
+    wheelIdleTimerRef.current = window.setTimeout(() => {
+      wheelGestureConsumedRef.current = false;
+    }, 170);
+
+    if (Math.abs(e.deltaY) < 24) return;
     const now = performance.now();
-    if (now - lastWheelAtRef.current < 580) return;
-    lastWheelAtRef.current = now;
+    if (wheelGestureConsumedRef.current || now < wheelCooldownUntilRef.current) {
+      return;
+    }
+
+    wheelGestureConsumedRef.current = true;
+    wheelCooldownUntilRef.current = now + 950;
 
     if (e.deltaY > 0) {
       goToSlide(slideIndex + 1);
@@ -195,11 +240,11 @@ export function PresentationView({
           vitals={vitals}
           envTelemetry={envTelemetry}
           visualMode={slide.visualMode}
-          autoRotate={slide.autoRotate}
+          autoRotate={slide.autoRotate && !inspectMode}
           cameraResetToken={cameraResetToken}
-          cameraPreset={introOpen ? "full" : slide.cameraPreset}
-          enableParallax={true}
-          allowWheelZoom={false}
+          cameraPreset={introOpen || inspectMode ? "full" : slide.cameraPreset}
+          enableParallax={!inspectMode}
+          allowWheelZoom={inspectMode}
           hideBottomHud={true}
           calloutFilter={slideIndex === 0 ? "none" : "selected"}
         />
@@ -248,8 +293,36 @@ export function PresentationView({
           </span>
         </button>
 
-        {/* Top-Right Single Console Action (Matched to CTA Glassmorphism) */}
-        <div className="pointer-events-auto flex items-center">
+        {/* Top-Right Inspect Toggle + Console Action */}
+        <div className="pointer-events-auto flex items-center gap-2">
+          {inspectMode && (
+            <button
+              type="button"
+              onClick={() => {
+                soundEngine.playHoverTick();
+                setCameraResetToken((n) => n + 1);
+              }}
+              className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.06] px-3 font-mono text-[10px] font-medium tracking-[0.16em] text-white/80 backdrop-blur-md transition hover:border-white/35 hover:text-white"
+            >
+              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">RESET VIEW</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              soundEngine.playHoverTick();
+              setInspectMode((prev) => !prev);
+            }}
+            className={`inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border px-3 font-mono text-[10px] font-semibold tracking-[0.16em] backdrop-blur-md transition ${
+              inspectMode
+                ? "border-sky-400/60 bg-sky-400/20 text-sky-200 hover:bg-sky-400/30"
+                : "border-white/15 bg-white/[0.06] text-white/80 hover:border-white/35 hover:text-white"
+            }`}
+          >
+            <Compass className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>{inspectMode ? "BRIEFING" : "INSPECT 3D"}</span>
+          </button>
           <button
             type="button"
             onClick={() => {
@@ -264,8 +337,106 @@ export function PresentationView({
         </div>
       </header>
 
-      {/* Left Compact HUD: Earth vs. Spaceflight Metrics (hidden on Slide 01 cover, clean glass cards on 02-06) */}
-      {slideIndex > 0 && (
+      {/* Left Compact HUD: Diagnostic Summary on Slide 07 or Earth vs. Spaceflight Metrics on 02-06 */}
+      {slide.id === "cmo-handoff" ? (
+        <aside
+          aria-label="Diagnostic Summary"
+          className="pointer-events-auto absolute top-1/2 left-5 z-30 hidden w-[268px] -translate-y-1/2 flex-col gap-2.5 sm:left-7 lg:flex"
+        >
+          <div className="flex items-center justify-between font-mono text-[9.5px] tracking-[0.18em] text-white/45">
+            <span>DIAGNOSTIC SUMMARY</span>
+            <span className="text-white/35">CMO READY</span>
+          </div>
+
+          <div className="rounded-xl border border-white/12 bg-[#060a12]/58 p-3.5 backdrop-blur-md">
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-[10px] tracking-[0.12em] text-white/65">
+                CREW READINESS
+              </span>
+              <span
+                className={`inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold tracking-wider ${
+                  evaluation.overallStatus === "green"
+                    ? "text-emerald-300"
+                    : evaluation.overallStatus === "amber"
+                      ? "text-amber-300"
+                      : "text-red-300"
+                }`}
+              >
+                <span
+                  className="h-1.5 w-1.5 rounded-full"
+                  style={{
+                    backgroundColor:
+                      evaluation.overallStatus === "green"
+                        ? "#34D399"
+                        : evaluation.overallStatus === "amber"
+                          ? "#FBBF24"
+                          : "#F87171",
+                  }}
+                />
+                {evaluation.overallStatus === "green"
+                  ? "NOMINAL"
+                  : evaluation.overallStatus === "amber"
+                    ? "CAUTION"
+                    : "CRITICAL"}
+              </span>
+            </div>
+            <div className="mt-1.5 font-mono text-2xl font-semibold text-white">
+              {evaluation.readinessScore}
+              <span className="text-xs font-normal text-white/45"> / 100</span>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-1.5 border-t border-white/[0.08] pt-2.5">
+              {(
+                [
+                  ["neuro_ocular", "NEURO"],
+                  ["cardiovascular", "CARDIO"],
+                  ["musculoskeletal_renal", "RENAL"],
+                  ["immune_hematology", "IMMUNE"],
+                  ["metabolic_endocrine", "METAB"],
+                  ["behavioral_circadian", "CIRCAD"],
+                ] as const
+              ).map(([sysKey, shortName]) => {
+                const sys = evaluation.systems[sysKey];
+                const dotHex =
+                  sys.status === "green"
+                    ? "#34D399"
+                    : sys.status === "amber"
+                      ? "#FBBF24"
+                      : "#F87171";
+                return (
+                  <div
+                    key={sysKey}
+                    className="flex items-center justify-between rounded-lg border border-white/[0.07] bg-white/[0.03] px-2 py-1 font-mono text-[9.5px]"
+                  >
+                    <span className="flex items-center gap-1.5 text-white/75">
+                      <span
+                        className="h-1.5 w-1.5 rounded-full"
+                        style={{ backgroundColor: dotHex }}
+                      />
+                      {shortName}
+                    </span>
+                    <span className="font-semibold text-white">{sys.score}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {(evaluation.activeCascades[0]?.immediateAction ||
+            evaluation.systems[selectedSystem]?.recommendedActions[0]) && (
+            <div className="rounded-xl border border-sky-400/25 bg-[#060a12]/58 p-3.5 backdrop-blur-md">
+              <span className="block font-mono text-[9.5px] tracking-[0.16em] text-sky-300/85">
+                PRIORITY CMO ACTION
+              </span>
+              <p className="mt-1.5 text-xs leading-relaxed text-white/80">
+                {evaluation.activeCascades[0]?.immediateAction ??
+                  evaluation.systems[selectedSystem]?.recommendedActions[0]}
+              </p>
+            </div>
+          )}
+        </aside>
+      ) : (
+        slideIndex > 0 && (
         <aside
           aria-label="Slide Telemetry Comparison"
           className="pointer-events-auto absolute top-1/2 left-5 z-30 hidden w-[268px] -translate-y-1/2 flex-col gap-2.5 sm:left-7 lg:flex"
@@ -340,7 +511,7 @@ export function PresentationView({
             </button>
           )}
         </aside>
-      )}
+      ))}
 
       {/* Right Vertical Chapter Rail (Hubtown Style, 28px margin, right-aligned) */}
       <nav
@@ -448,7 +619,8 @@ export function PresentationView({
         </button>
 
         <span className="font-mono text-[10px] tracking-[0.22em] text-white/55">
-          {slide.chapterCode} / 06
+          {slide.chapterCode} /{" "}
+          {String(PRESENTATION_SLIDES.length).padStart(2, "0")}
         </span>
       </div>
 

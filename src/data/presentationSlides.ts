@@ -22,6 +22,7 @@ export interface PresentationSlide {
   cameraPreset: "full" | BodySystemId;
   visualMode: ClinicalVisualMode;
   autoRotate: boolean;
+  preserveActiveScenario?: boolean;
   osdrRefs: string[];
   metrics: [SlideMetricPair, SlideMetricPair];
 }
@@ -192,7 +193,7 @@ export const PRESENTATION_SLIDES: PresentationSlide[] = [
     title: "CIRCADIAN DRIFT & INSULIN SHIFT",
     summary:
       "16 orbital sunrises/day and confinement stress elevate cortisol, shifting fasting glucose toward subclinical insulin resistance.",
-    ctaLabel: "OPEN FULL CMO CONSOLE",
+    ctaLabel: "NEXT: CMO HANDOFF",
     scenarioId: "renal_dehydration",
     focusSystem: "metabolic_endocrine",
     cameraPreset: "metabolic_endocrine",
@@ -213,6 +214,37 @@ export const PRESENTATION_SLIDES: PresentationSlide[] = [
         spaceValue: "5.7",
         unit: "hrs/day",
         critical: true,
+      },
+    ],
+  },
+  {
+    id: "cmo-handoff",
+    chapterCode: "07",
+    chapterLabel: "CMO HANDOFF",
+    kicker: "CHAPTER 07 // DIAGNOSTIC SUMMARY & ACTION",
+    title: "FROM SIGNALS TO CMO ACTION",
+    summary:
+      "All six physiological systems and domino cascades are synthesized into a prioritized Crew Medical Officer triage plan ready for autonomous intervention.",
+    ctaLabel: "OPEN FULL CMO CONSOLE",
+    scenarioId: "solar_storm",
+    focusSystem: "cardiovascular",
+    cameraPreset: "full",
+    visualMode: "atlas",
+    autoRotate: true,
+    preserveActiveScenario: true,
+    osdrRefs: ["NASA HRP", "ARES-MED"],
+    metrics: [
+      {
+        label: "BioTwin Coverage",
+        earthValue: "Standard Lab",
+        spaceValue: "6 Systems",
+        unit: "Multi-Organ",
+      },
+      {
+        label: "Autonomous Triage",
+        earthValue: "Ground Loop",
+        spaceValue: "Onboard AI",
+        unit: "CMO Ready",
       },
     ],
   },
