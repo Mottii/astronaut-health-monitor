@@ -251,6 +251,7 @@ const FRESNEL_VERTEX_SHADER = `
 const FRESNEL_FRAGMENT_SHADER = `
   uniform float uTime;
   uniform float uXrayDeep;
+  uniform float uTransitionScan;
   uniform vec3 uFocusPos;
   uniform vec3 uAccentColor;
 
@@ -264,32 +265,36 @@ const FRESNEL_FRAGMENT_SHADER = `
     float ndotv = clamp(abs(dot(N, V)), 0.0, 1.0);
     float fresnel = pow(1.0 - ndotv, 2.25);
 
-    // Dual surgical scanlines + holographic topographic micro-grid
-    float scanline = 0.5 + 0.5 * sin(vWorldPos.y * 190.0 - uTime * 1.8);
-    float gridY = smoothstep(0.92, 0.99, abs(sin(vWorldPos.y * 42.0)));
-    float gridX = smoothstep(0.94, 0.995, abs(sin(vWorldPos.x * 42.0 + vWorldPos.z * 42.0)));
-    float holoGrid = max(gridY, gridX) * 0.28;
+    // Subtle surgical scanlines + holographic topographic micro-grid
+    float scanline = 0.5 + 0.5 * sin(vWorldPos.y * 190.0 - uTime * 1.4);
+    float gridY = smoothstep(0.93, 0.99, abs(sin(vWorldPos.y * 42.0)));
+    float gridX = smoothstep(0.95, 0.995, abs(sin(vWorldPos.x * 42.0 + vWorldPos.z * 42.0)));
+    float holoGrid = max(gridY, gridX) * 0.22;
 
-    float sweepY = mod(uTime * 0.45, 2.2) - 1.05;
-    float sweep = exp(-abs(vWorldPos.y - sweepY) * 28.0);
+    // Gentle ambient scan + pronounced chapter-transition scan sweep
+    float sweepY = mod(uTime * 0.35, 2.2) - 1.05;
+    float sweep = exp(-abs(vWorldPos.y - sweepY) * 32.0) * 0.45;
+    float transY = mix(1.05, -1.05, uTransitionScan);
+    float transSweep = step(0.001, uTransitionScan) * step(uTransitionScan, 0.999) * exp(-abs(vWorldPos.y - transY) * 24.0);
 
-    // Spherical X-Ray window centered around inspected organ
+    // Soft spherical inspection window centered around inspected organ
     float distToFocus = distance(vWorldPos, uFocusPos);
-    float focusWindow = smoothstep(0.08, 0.34, distToFocus);
+    float focusWindow = smoothstep(0.09, 0.36, distToFocus);
+    float windowRim = exp(-pow((distToFocus - 0.24) * 10.0, 2.0)) * 0.35;
 
     vec3 obsidianBase = vec3(0.025, 0.032, 0.048);
     vec3 cyanRim = vec3(0.28, 0.78, 0.98);
     vec3 silverRim = vec3(0.88, 0.94, 1.0);
     vec3 rimCol = mix(cyanRim, silverRim, fresnel);
     vec3 col = mix(obsidianBase, rimCol, fresnel * 0.92);
-    col += uAccentColor * (sweep * 0.32 + (1.0 - focusWindow) * fresnel * 0.28);
-    col += rimCol * holoGrid * (0.35 + fresnel * 0.65);
+    col += uAccentColor * (sweep * 0.28 + transSweep * 0.85 + windowRim + (1.0 - focusWindow) * fresnel * 0.22);
+    col += rimCol * holoGrid * (0.28 + fresnel * 0.6);
     col += vec3(0.05, 0.09, 0.14) * scanline * fresnel;
 
-    float baseAlpha = mix(0.018, 0.54, fresnel) + holoGrid * 0.08;
-    float cutoutAlpha = mix(0.14, 1.0, focusWindow);
-    float depthFactor = mix(1.0, 0.42, uXrayDeep);
-    float alpha = clamp(baseAlpha * cutoutAlpha * depthFactor + sweep * 0.06, 0.012, 0.72);
+    float baseAlpha = mix(0.016, 0.52, fresnel) + holoGrid * 0.06;
+    float cutoutAlpha = mix(0.05, 1.0, focusWindow);
+    float depthFactor = mix(1.0, 0.38, uXrayDeep);
+    float alpha = clamp(baseAlpha * cutoutAlpha * depthFactor + sweep * 0.04 + transSweep * 0.16, 0.01, 0.72);
 
     gl_FragColor = vec4(col, alpha);
   }
@@ -315,20 +320,30 @@ const NEBULA_FRAGMENT_SHADER = `
   }
 
   void main() {
-    float waveA = sin(vDir.x * 4.5 + uTime * 0.12) * cos(vDir.y * 3.8 - uTime * 0.09);
-    float waveB = sin((vDir.z + vDir.y) * 6.0 + uTime * 0.16);
-    float neb = clamp(0.5 + 0.35 * waveA + 0.25 * waveB, 0.0, 1.0);
+    float waveA = sin(vDir.x * 3.8 + uTime * 0.09) * cos(vDir.y * 3.2 - uTime * 0.07);
+    float waveB = sin((vDir.z + vDir.y) * 5.2 + uTime * 0.11);
+    float waveC = cos((vDir.x - vDir.z) * 2.6 - uTime * 0.05);
+    float neb = clamp(0.48 + 0.30 * waveA + 0.22 * waveB + 0.14 * waveC, 0.0, 1.0);
 
-    vec3 deepSpace = vec3(0.022, 0.026, 0.038);
-    vec3 indigoMist = vec3(0.045, 0.075, 0.14);
-    vec3 col = mix(deepSpace, indigoMist, pow(neb, 2.0));
-    col += uAccentColor * (0.045 * pow(neb, 3.0) * (1.0 - abs(vDir.y)));
+    vec3 deepSpace = vec3(0.018, 0.022, 0.034);
+    vec3 indigoMist = vec3(0.048, 0.088, 0.168);
+    vec3 col = mix(deepSpace, indigoMist, pow(neb, 1.85));
 
-    // Subtle crisp starfield
-    vec3 cell = floor(vDir * 145.0);
-    float star = step(0.994, hash(cell));
-    float twinkle = 0.55 + 0.45 * sin(uTime * 1.8 + hash(cell) * 24.0);
-    col += vec3(0.75, 0.88, 1.0) * star * twinkle * 0.42;
+    // Soft behind-silhouette cosmic horizon glow
+    float horizonGlow = exp(-pow(vDir.y * 2.4, 2.0)) * 0.55;
+    col += uAccentColor * (0.075 * pow(neb, 2.4) + 0.05 * horizonGlow);
+
+    // Layer 1: Dense crisp distant stars
+    vec3 cellFar = floor(vDir * 175.0);
+    float starFar = step(0.9925, hash(cellFar));
+    float twinkleFar = 0.5 + 0.5 * sin(uTime * 1.4 + hash(cellFar) * 28.0);
+    col += vec3(0.72, 0.86, 1.0) * starFar * twinkleFar * 0.45;
+
+    // Layer 2: Sparse brighter cool-cyan orbital stars
+    vec3 cellNear = floor(vDir * 72.0 + vec3(3.1, 7.4, 1.9));
+    float starNear = step(0.9965, hash(cellNear));
+    float twinkleNear = 0.65 + 0.35 * sin(uTime * 2.1 + hash(cellNear) * 19.0);
+    col += mix(vec3(0.85, 0.94, 1.0), uAccentColor, 0.35) * starNear * twinkleNear * 0.78;
 
     gl_FragColor = vec4(col, 1.0);
   }
@@ -769,6 +784,18 @@ export function BioTwin3DStage({
       floorGroup.add(new THREE.Mesh(ringGeo, ringMat));
     }
 
+    const floorScanArcGeo = new THREE.RingGeometry(0.42, 0.435, 48, 1, 0, Math.PI * 0.42);
+    floorScanArcGeo.rotateX(-Math.PI / 2);
+    const floorScanArcMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.34,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const floorScanArc = new THREE.Mesh(floorScanArcGeo, floorScanArcMat);
+    floorGroup.add(floorScanArc);
+
     const floorParticleCount = 900;
     const floorParticlePositions = new Float32Array(floorParticleCount * 3);
     const floorParticleBase = new Float32Array(floorParticleCount * 2);
@@ -834,23 +861,24 @@ export function BioTwin3DStage({
     );
     scene.add(nebulaDome);
 
-    // Ambient floating cosmic dust particles around astronaut
-    const dustCount = 220;
+    // Ambient floating cosmic dust particles around astronaut at varying depths
+    const dustCount = 520;
     const dustPositions = new Float32Array(dustCount * 3);
     const dustSeeds = Array.from({ length: dustCount }, (_, i) => ({
-      x: (((i * 73) % 100) / 100 - 0.5) * 4.2,
-      y: (((i * 41) % 100) / 100 - 0.5) * 2.8,
-      z: (((i * 97) % 100) / 100 - 0.5) * 3.2,
-      speed: 0.25 + ((i * 17) % 10) * 0.04,
+      x: (((i * 73) % 100) / 100 - 0.5) * 6.4,
+      y: (((i * 41) % 100) / 100 - 0.5) * 3.8,
+      z: (((i * 97) % 100) / 100 - 0.5) * 5.2 - 0.6,
+      speed: 0.18 + ((i * 17) % 10) * 0.032,
+      radius: 0.05 + ((i * 23) % 10) * 0.012,
     }));
     const dustGeo = new THREE.BufferGeometry();
     dustGeo.setAttribute("position", new THREE.BufferAttribute(dustPositions, 3));
     const dustMat = new THREE.PointsMaterial({
       color: 0xbae6fd,
-      size: 0.02,
+      size: 0.024,
       map: softDotTex ?? undefined,
       transparent: true,
-      opacity: 0.45,
+      opacity: 0.58,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
@@ -900,6 +928,7 @@ export function BioTwin3DStage({
       uniforms: {
         uTime: { value: 0 },
         uXrayDeep: { value: 0 },
+        uTransitionScan: { value: 0 },
         uFocusPos: { value: ORGAN_ANCHORS[liveRef.current.selectedSystem].clone() },
         uAccentColor: { value: new THREE.Color("#2dd4bf") },
       },
@@ -1643,7 +1672,7 @@ export function BioTwin3DStage({
       const t = reducedMotionRef.current ? 0 : clock.elapsedTime;
       const snapshot = liveRef.current;
 
-      // Update camera fly-to timeline (cubic ease-in-out without spring overshoot)
+      // Update camera fly-to timeline (cubic ease-in-out along a shallow arc, no spring overshoot)
       if (flyRef.current.active) {
         flyRef.current.elapsed += dt;
         const u = Math.min(1, flyRef.current.elapsed / flyRef.current.duration);
@@ -1654,15 +1683,25 @@ export function BioTwin3DStage({
           flyRef.current.targetPos,
           eased
         );
+        // Subtle lateral/depth arc proportional to travel distance
+        const flyDist = flyRef.current.startPos.distanceTo(flyRef.current.targetPos);
+        const arcOffset = Math.sin(eased * Math.PI) * Math.min(0.32, flyDist * 0.14);
+        camera.position.x += arcOffset * 0.65;
+        camera.position.z += arcOffset * 0.75;
+
         controls.target.lerpVectors(
           flyRef.current.startLook,
           flyRef.current.targetLook,
           eased
         );
+        shellMaterial.uniforms.uTransitionScan.value = u;
         if (u >= 1) {
           flyRef.current.active = false;
+          shellMaterial.uniforms.uTransitionScan.value = 0;
           onCameraTransitionEndRef.current?.();
         }
+      } else {
+        shellMaterial.uniforms.uTransitionScan.value = 0;
       }
 
       controls.autoRotate =
@@ -1716,15 +1755,16 @@ export function BioTwin3DStage({
       focusInnerRing.rotation.y = t * 0.42;
       focusOuterMat.color.lerp(targetColor, 0.14);
 
-      // Update ambient cosmic dust drift
+      // Update ambient cosmic dust 3D orbital drift & floor scan arc
+      floorScanArc.rotation.y = t * 0.48;
       const dAttr = dustGeo.getAttribute("position") as THREE.BufferAttribute;
       for (let i = 0; i < dustCount; i++) {
         const s = dustSeeds[i];
         dAttr.setXYZ(
           i,
-          s.x + Math.sin(t * s.speed + i) * 0.06,
-          s.y + Math.cos(t * s.speed * 0.8 + i) * 0.05,
-          s.z
+          s.x + Math.sin(t * s.speed + i) * s.radius,
+          s.y + Math.cos(t * s.speed * 0.82 + i * 0.7) * (s.radius * 0.8),
+          s.z + Math.sin(t * s.speed * 0.65 + i * 1.3) * (s.radius * 0.7)
         );
       }
       dAttr.needsUpdate = true;
@@ -1819,8 +1859,8 @@ export function BioTwin3DStage({
           const isOverview = cameraPresetRef.current === "full";
           let targetOpacity = isSelected
             ? isShell
-              ? 0.56
-              : 0.78
+              ? 0.64
+              : 0.94
             : isOverview
               ? isShell
                 ? 0.36
@@ -1828,35 +1868,42 @@ export function BioTwin3DStage({
                   ? 0.54
                   : 0.52
               : isShell
-                ? 0.15
+                ? 0.06
                 : entry.meta.tissueTag === "Artery" || entry.meta.tissueTag === "Vein"
-                  ? 0.28
-                  : 0.22;
+                  ? 0.14
+                  : 0.10;
           if (effectiveMode === "xray") {
-            targetOpacity = isShell ? 0.18 : isSelected ? 0.80 : isOverview ? 0.52 : 0.26;
+            targetOpacity = isShell ? 0.16 : isSelected ? 0.88 : isOverview ? 0.52 : 0.12;
           } else if (effectiveMode === "vascular") {
-            targetOpacity = isVascularTissue ? (isShell ? 0.32 : 0.80) : 0.06;
+            targetOpacity = isVascularTissue
+              ? isSelected || isOverview
+                ? isShell
+                  ? 0.34
+                  : 0.88
+                : 0.22
+              : 0.04;
           }
-          entry.material.opacity += (targetOpacity - entry.material.opacity) * 0.16;
+          entry.material.opacity += (targetOpacity - entry.material.opacity) * 0.14;
           entry.material.depthWrite = false;
           entry.mesh.renderOrder = isVascularTissue && effectiveMode === "vascular" ? 8 : isShell ? 6 : 4;
 
           const dimNonVascular = effectiveMode === "vascular" && !isVascularTissue;
-          const baseEmissive = dimNonVascular
+          const dimNonFocal = !isOverview && !isSelected && effectiveMode !== "vascular";
+          const baseEmissive = dimNonVascular || dimNonFocal
             ? 0.04
             : isSelected
               ? isShell
-                ? 0.42
-                : 0.85
+                ? 0.48
+                : 1.02
               : assessment.status === "green"
                 ? isShell
                   ? 0.12
-                  : 0.22
-                : 0.42;
-          entry.material.emissiveIntensity = dimNonVascular
+                  : 0.24
+                : 0.44;
+          entry.material.emissiveIntensity = dimNonVascular || dimNonFocal
             ? baseEmissive
             : baseEmissive +
-              pulse * (isSelected || assessment.status !== "green" ? 0.5 : 0.18);
+              pulse * (isSelected || assessment.status !== "green" ? 0.52 : 0.18);
         }
       }
 

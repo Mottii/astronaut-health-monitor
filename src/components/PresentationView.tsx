@@ -340,8 +340,10 @@ export function PresentationView({
       {/* Left Compact HUD: Diagnostic Summary on Slide 07 or Earth vs. Spaceflight Metrics on 02-06 */}
       {slide.id === "cmo-handoff" ? (
         <aside
+          key={`${slide.id}-summary`}
           aria-label="Diagnostic Summary"
-          className="pointer-events-auto absolute top-1/2 left-5 z-30 hidden w-[268px] -translate-y-1/2 flex-col gap-2.5 sm:left-7 lg:flex"
+          style={{ animationDelay: "260ms" }}
+          className="ares-choreo-enter pointer-events-auto absolute top-1/2 left-5 z-30 hidden w-[268px] -translate-y-1/2 flex-col gap-2.5 sm:left-7 lg:flex"
         >
           <div className="flex items-center justify-between font-mono text-[9.5px] tracking-[0.18em] text-white/45">
             <span>DIAGNOSTIC SUMMARY</span>
@@ -446,10 +448,11 @@ export function PresentationView({
             <span className="text-white/35">{slide.osdrRefs[0] ?? "NASA HRP"}</span>
           </div>
 
-          {slide.metrics.map((metric) => (
+          {slide.metrics.map((metric, idx) => (
             <div
-              key={metric.label}
-              className="rounded-xl border border-white/12 bg-[#060a12]/48 p-3.5 backdrop-blur-md"
+              key={`${slide.id}-${metric.label}`}
+              style={{ animationDelay: `${240 + idx * 100}ms` }}
+              className="ares-choreo-enter rounded-xl border border-white/12 bg-[#060a12]/48 p-3.5 backdrop-blur-md transition-colors duration-200 hover:border-white/28"
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="font-mono text-[10px] tracking-[0.08em] text-white/70">
@@ -551,7 +554,11 @@ export function PresentationView({
       </nav>
 
       {/* Bottom Center Slide Headline & CTA (Hubtown Hero Placement) */}
-      <section className="pointer-events-none absolute inset-x-0 bottom-14 z-30 mx-auto flex max-w-2xl flex-col items-center px-5 text-center sm:bottom-12">
+      <section
+        key={`${slide.id}-hero`}
+        style={{ animationDelay: "160ms" }}
+        className="ares-choreo-enter pointer-events-none absolute inset-x-0 bottom-14 z-30 mx-auto flex max-w-2xl flex-col items-center px-5 text-center sm:bottom-12"
+      >
         <span className="font-mono text-[10px] tracking-[0.24em] text-sky-300/90">
           {slide.kicker}
         </span>
