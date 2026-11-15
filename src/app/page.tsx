@@ -321,12 +321,15 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    if (
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("mode") === "console"
-    ) {
-      setSurfaceMode("console");
-    }
+    // Pre-Flight can open the console once; a later reload starts the presentation again.
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("mode") !== "console") return;
+    url.searchParams.delete("mode");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    setSurfaceMode("console");
+  }, []);
+
+  useEffect(() => {
     setRoutineProgress(loadRoutineProgress());
     const loaded = loadCrewProfilesState();
     setCrewStore(loaded);
