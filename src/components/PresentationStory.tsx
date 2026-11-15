@@ -3,10 +3,12 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUpRight } from "lucide-react";
 import { BioTwin3DStage, type FocusProjection } from "@/components/BioTwin3DStage";
-import { AresLogo3D } from "@/components/AresLogo3D";
+import { DeveloperCards } from "@/components/DeveloperCards";
 import { PRESENTATION_SLIDES } from "@/data/presentationSlides";
-import { followScroll, STORY_CHAPTER_COUNT, storyScrollTarget, wrapStoryProgress } from "@/lib/briefingPath";
+import { PRESENTATION_ACCENTS } from "@/data/presentationTheme";
+import { followScroll, rebaseStoryProgress, STORY_CHAPTER_COUNT, storyScrollTarget, unwrapStoryProgress, wrapStoryProgress } from "@/lib/briefingPath";
 import { soundEngine } from "@/lib/soundEngine";
+import { startConsoleTransition } from "@/lib/consoleTransition";
 import type { SpaceWeatherStatus } from "@/lib/nasaApi";
 import type { BodySystemId, EnvironmentTelemetry, HealthEvaluationResult, VitalReadings } from "@/types/health";
 
@@ -25,19 +27,21 @@ export interface PresentationViewProps {
 }
 
 const EDITORIAL_CHAPTERS = [
-  { title: ["ARES-MED"], label: "AUTONOMOUS MEDICINE / DEEP SPACE", color: "#c1d0dc", organ: "HUMAN BIOTWIN" },
-  { title: ["A human life.", "Beyond Earth."], label: "MEDICINE FOR DEEP SPACE", color: "#c1d0dc", organ: "HUMAN BIOTWIN" },
-  { title: ["When fluid shifts,", "vision changes."], label: "NEURO-OCULAR / SANS", color: "#70b7b2", organ: "NEURO-OCULAR SYSTEM" },
-  { title: ["A different gravity.", "A different rhythm."], label: "CARDIOVASCULAR ADAPTATION", color: "#c8797e", organ: "HEART & CIRCULATION" },
-  { title: ["Connected systems.", "Shared consequences."], label: "BONE & RENAL CASCADE", color: "#81ae98", organ: "KIDNEYS & SKELETON" },
-  { title: ["Invisible exposure.", "Visible response."], label: "RADIATION & IMMUNITY", color: "#a895c1", organ: "IMMUNE SYSTEM" },
-  { title: ["Rest. Rhythm.", "Balance."], label: "METABOLIC & CIRCADIAN", color: "#c6927c", organ: "METABOLIC SYSTEM" },
-];
+  { title: ["ARES-MED"], label: "AUTONOMOUS MEDICINE / DEEP SPACE", organ: "HUMAN BIOTWIN" },
+  { title: ["A human life.", "Beyond Earth."], label: "MEDICINE FOR DEEP SPACE", organ: "HUMAN BIOTWIN" },
+  { title: ["When fluid shifts,", "vision changes."], label: "NEURO-OCULAR / SANS", organ: "NEURO-OCULAR SYSTEM" },
+  { title: ["A different gravity.", "A different rhythm."], label: "CARDIOVASCULAR ADAPTATION", organ: "HEART & CIRCULATION" },
+  { title: ["Connected systems.", "Shared consequences."], label: "BONE & RENAL CASCADE", organ: "KIDNEYS & SKELETON" },
+  { title: ["Invisible exposure.", "Visible response."], label: "RADIATION & IMMUNITY", organ: "IMMUNE SYSTEM" },
+  { title: ["Rest. Rhythm.", "Balance."], label: "METABOLIC & CIRCADIAN", organ: "METABOLIC SYSTEM" },
+].map((chapter,index) => ({ ...chapter, color: PRESENTATION_ACCENTS[index] }));
 
-// Matching end copies let the native scroller cross the seam before being rebased invisibly.
+// Three identical runs leave room for native momentum on either side of the active run.
 const CONSOLE_EXIT_MS = 640; // keep in sync with the ares-story-compress animation in globals.css
-const STORY_PAGES = [STORY_CHAPTER_COUNT - 1, ...PRESENTATION_SLIDES.map((_, index) => index), 0]
-  .map((index, page) => ({ index, page, slide: PRESENTATION_SLIDES[index], clone: page === 0 || page === STORY_CHAPTER_COUNT + 1 }));
+const STORY_PAGES = Array.from({ length: STORY_CHAPTER_COUNT * 3 }, (_, page) => {
+  const index = page % STORY_CHAPTER_COUNT;
+  return { index, page, slide: PRESENTATION_SLIDES[index], clone: page < STORY_CHAPTER_COUNT || page >= STORY_CHAPTER_COUNT * 2 };
+});
 
 export function PresentationStory({
   slideIndex, onSelectSlide, onOpenConsole, evaluation, vitals, envTelemetry,
@@ -48,10 +52,10 @@ export function PresentationStory({
   const chaptersRef = useRef<Array<HTMLElement | null>>([]);
   const progressRef = useRef(slideIndex);
   const destinationRef = useRef(slideIndex);
+  const physicalProgressRef = useRef(slideIndex);
   const modelRotationRef = useRef(0);
   const dragRef = useRef<{ pointer: number; x: number; y: number; angle: number; active: boolean } | null>(null);
   const snapTimerRef = useRef<number | null>(null);
-  const settleUntilRef = useRef(0);
   const initialIndex = useRef(slideIndex);
   const currentIndexRef = useRef(slideIndex);
   const onSelectRef = useRef(onSelectSlide);
@@ -92,23 +96,15 @@ export function PresentationStory({
   useEffect(() => {
     const scroller = scrollRef.current;
     if (!scroller) return;
-    scroller.scrollTop = (initialIndex.current + 1) * scroller.clientHeight;
+    scroller.scrollTop = (initialIndex.current + STORY_CHAPTER_COUNT) * scroller.clientHeight;
     let raf = 0;
     let lastTime = performance.now();
     const animate = (now: number) => {
       const dt = (now - lastTime) / 1000;
       lastTime = now;
-      let progress = reducedMotionRef.current
+      const progress = reducedMotionRef.current
         ? destinationRef.current
         : followScroll(progressRef.current, destinationRef.current, dt);
-      const forwardSeam = destinationRef.current >= STORY_CHAPTER_COUNT - 0.001 && Math.abs(progress - STORY_CHAPTER_COUNT) < 0.004;
-      const backwardSeam = destinationRef.current <= -0.999 && Math.abs(progress + 1) < 0.004;
-      if (forwardSeam || backwardSeam) {
-        const shift = forwardSeam ? -STORY_CHAPTER_COUNT : STORY_CHAPTER_COUNT;
-        progress += shift;
-        destinationRef.current += shift;
-        scroller.scrollTo({ top: (destinationRef.current + 1) * scroller.clientHeight, behavior: "instant" });
-      }
       progressRef.current = progress;
       rootRef.current?.style.setProperty("--story-progress", String(wrapStoryProgress(progress) / STORY_CHAPTER_COUNT));
       const nearest = wrapStoryProgress(Math.round(progress));
@@ -117,48 +113,48 @@ export function PresentationStory({
         onSelectRef.current(nearest);
       }
       for (let i = 0; i < chaptersRef.current.length; i++) {
-        const presence = Math.max(0, 1 - Math.abs(destinationRef.current - (i - 1)) * 0.95);
+        const presence = Math.max(0, 1 - Math.abs(physicalProgressRef.current - (i - STORY_CHAPTER_COUNT)) * 0.95);
         chaptersRef.current[i]?.style.setProperty("--presence", String(presence));
       }
       raf = requestAnimationFrame(animate);
     };
     raf = requestAnimationFrame(animate);
     const onResize = () => {
-      destinationRef.current = currentIndexRef.current;
-      progressRef.current = currentIndexRef.current;
-      scroller.scrollTop = (currentIndexRef.current + 1) * scroller.clientHeight;
+      destinationRef.current = Math.round(progressRef.current);
+      progressRef.current = destinationRef.current;
+      physicalProgressRef.current = wrapStoryProgress(destinationRef.current);
+      scroller.scrollTop = (physicalProgressRef.current + STORY_CHAPTER_COUNT) * scroller.clientHeight;
     };
     window.addEventListener("resize", onResize);
-    const holdAtChapter = (event: WheelEvent) => {
-      if (performance.now() < settleUntilRef.current) event.preventDefault();
-    };
-    scroller.addEventListener("wheel", holdAtChapter, { passive: false });
     return () => {
       cancelAnimationFrame(raf);
       if (snapTimerRef.current !== null) window.clearTimeout(snapTimerRef.current);
-      scroller.removeEventListener("wheel", holdAtChapter);
       window.removeEventListener("resize", onResize);
     };
   }, []);
 
   const handleStoryScroll = (event: React.UIEvent<HTMLDivElement>) => {
     const scroller = event.currentTarget;
-    destinationRef.current = scroller.scrollTop / Math.max(1, scroller.clientHeight) - 1;
+    const height = Math.max(1, scroller.clientHeight);
+    const position = rebaseStoryProgress(scroller.scrollTop / height - STORY_CHAPTER_COUNT);
+    destinationRef.current = unwrapStoryProgress(destinationRef.current, position.progress);
+    physicalProgressRef.current = position.progress;
+    if (position.shift !== 0) {
+      // Only the DOM wraps. Camera, morph and particles keep their continuous timeline.
+      scroller.scrollTo({ top: (position.progress + STORY_CHAPTER_COUNT) * height, behavior: "instant" });
+    }
     if (snapTimerRef.current !== null) window.clearTimeout(snapTimerRef.current);
     snapTimerRef.current = window.setTimeout(() => {
-      const chapter = Math.round(destinationRef.current);
-      const centeredTop = (chapter + 1) * scroller.clientHeight;
+      const chapter = Math.round(physicalProgressRef.current);
+      const centeredTop = (chapter + STORY_CHAPTER_COUNT) * scroller.clientHeight;
       if (Math.abs(scroller.scrollTop - centeredTop) > 1) {
         scroller.scrollTo({ top: centeredTop, behavior: reducedMotionRef.current ? "instant" : "smooth" });
-      } else {
-        // A brief reading pause catches leftover trackpad momentum, not the next deliberate gesture.
-        settleUntilRef.current = performance.now() + 280;
       }
     }, 160);
   };
 
   const beginRotation = (event: React.PointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button, a, .ares-story-copy")) return;
+    if ((event.target as HTMLElement).closest("button, a, .ares-story-copy, .ares-title-brief")) return;
     dragRef.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY, angle: modelRotationRef.current, active: false };
   };
   const rotateModel = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -185,8 +181,18 @@ export function PresentationStory({
   const goTo = useCallback((index: number) => {
     const scroller = scrollRef.current;
     if (!scroller) return;
+    if (snapTimerRef.current !== null) window.clearTimeout(snapTimerRef.current);
+    // A destination can already show slide 01 while its camera is still finishing slide 07.
+    // Recenter that identical copy before navigation, so 01 -> 02 never traverses 07 -> 02.
+    const physical = physicalProgressRef.current;
+    const centered = physical - Math.floor((physical + 0.5) / STORY_CHAPTER_COUNT) * STORY_CHAPTER_COUNT;
+    if (Math.abs(centered - physical) > 0.001) {
+      physicalProgressRef.current = centered;
+      scroller.scrollTo({ top: (centered + STORY_CHAPTER_COUNT) * scroller.clientHeight, behavior: "instant" });
+    }
+    const current = wrapStoryProgress(Math.round(centered));
     scroller.scrollTo({
-      top: (storyScrollTarget(currentIndexRef.current, index) + 1) * scroller.clientHeight,
+      top: (storyScrollTarget(current, index) + STORY_CHAPTER_COUNT) * scroller.clientHeight,
       behavior: reducedMotionRef.current ? "instant" : "smooth",
     });
   }, []);
@@ -197,9 +203,9 @@ export function PresentationStory({
       if (event.key === "[" || event.key === "]") {
         event.preventDefault(); modelRotationRef.current += event.key === "[" ? -0.18 : 0.18;
       } else if (["ArrowDown", "ArrowRight", "PageDown", " "].includes(event.key)) {
-        event.preventDefault(); goTo(currentIndexRef.current + 1);
+        event.preventDefault(); goTo(wrapStoryProgress(Math.round(physicalProgressRef.current)) + 1);
       } else if (["ArrowUp", "ArrowLeft", "PageUp"].includes(event.key)) {
-        event.preventDefault(); goTo(currentIndexRef.current - 1);
+        event.preventDefault(); goTo(wrapStoryProgress(Math.round(physicalProgressRef.current)) - 1);
       } else if (event.key === "Home" || event.key === "End") {
         event.preventDefault(); goTo(event.key === "Home" ? 0 : STORY_CHAPTER_COUNT - 1);
       }
@@ -210,18 +216,24 @@ export function PresentationStory({
 
   // Opening the console: the briefing compresses away, then the console's panels fly in from the sides.
   const [leaving, setLeaving] = useState(false);
-  const leaveTimerRef = useRef<number | null>(null);
-  useEffect(() => () => { if (leaveTimerRef.current !== null) window.clearTimeout(leaveTimerRef.current); }, []);
+  const consoleCallbackRef = useRef(onOpenConsole);
+  consoleCallbackRef.current = onOpenConsole;
+  const consoleTransitionRef = useRef<ReturnType<typeof startConsoleTransition> | null>(null);
+  useEffect(() => () => { consoleTransitionRef.current?.cancel(); }, []);
   const openConsole = useCallback(() => {
-    if (leaveTimerRef.current !== null) return;
+    if (consoleTransitionRef.current) return;
     setLeaving(true);
-    soundEngine.playCameraWhoosh();
-    leaveTimerRef.current = window.setTimeout(onOpenConsole, reducedMotionRef.current ? 0 : CONSOLE_EXIT_MS);
-  }, [onOpenConsole]);
+    consoleTransitionRef.current = startConsoleTransition(
+      () => consoleCallbackRef.current(),
+      () => soundEngine.playCameraWhoosh(),
+      reducedMotionRef.current ? 0 : CONSOLE_EXIT_MS + 80,
+    );
+  }, []);
 
   const activeChapter = EDITORIAL_CHAPTERS[slideIndex] ?? EDITORIAL_CHAPTERS[0];
   return (
-    <div ref={rootRef} className="ares-story" data-testid="cinematic-briefing" data-slide={PRESENTATION_SLIDES[slideIndex]?.id} data-motion={reducedMotion ? "reduced" : "full"} data-leaving={leaving || undefined} style={{ "--chapter-color": activeChapter.color } as React.CSSProperties}>
+    <div ref={rootRef} className="ares-story" data-testid="cinematic-briefing" data-slide={PRESENTATION_SLIDES[slideIndex]?.id} data-motion={reducedMotion ? "reduced" : "full"} data-leaving={leaving || undefined} style={{ "--chapter-color": activeChapter.color } as React.CSSProperties}
+      onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "ares-story-compress") consoleTransitionRef.current?.finish(); }}>
       <div className="ares-story-scene">
         <BioTwin3DStage assessments={evaluation.systems} cascades={evaluation.activeCascades}
           selectedSystem={selectedSystem} onSelectSystem={onSelectSystem}
@@ -245,7 +257,7 @@ export function PresentationStory({
             aria-label={soundOn ? "Mute sound" : "Enable sound"} aria-pressed={soundOn} onClick={() => setSoundOn(soundEngine.toggle())}>
             <span className="ares-story-audio-mark" data-playing={soundOn} aria-hidden="true"><i /><i /><i /><i /></span>
           </button>
-          <button type="button" onClick={openConsole} className="ares-story-console">CMO CONSOLE <ArrowUpRight size={14} aria-hidden="true" /></button>
+          <button type="button" onClick={openConsole} className="ares-story-console" disabled={leaving} aria-busy={leaving} aria-label="Open CMO console">CMO CONSOLE <ArrowUpRight size={14} aria-hidden="true" /></button>
         </div>
       </header>
 
@@ -262,10 +274,14 @@ export function PresentationStory({
               className={`ares-story-chapter ${index <= 1 ? "is-cover" : ""} ${index === 0 ? "is-title" : ""}`} aria-label={`${slide.chapterCode} ${slide.chapterLabel}`} style={{ "--chapter-color": chapter.color } as React.CSSProperties}>
               <div className="ares-story-copy">
                 {index !== 0 && <div className="ares-story-eyebrow"><span>{slide.chapterCode}</span><span className="ares-story-rule" />{chapter.label}</div>}
-                <Heading className={index === 0 ? "ares-sr-only" : undefined}>{chapter.title.map((line) => <span key={line}>{line}</span>)}</Heading>
-                {index === 0 && <AresLogo3D className="ares-story-logo" reducedMotion={reducedMotion} />}
+                {index === 0 && <div className="ares-title-kicker">AUTONOMOUS MEDICINE / DEEP SPACE</div>}
+                <Heading>{chapter.title.map((line) => <span key={line}>{line}</span>)}</Heading>
+                {index === 0 && <div className="ares-story-title-subtitle">Human health. Beyond Earth.</div>}
                 <p className="ares-story-description">{slide.summary}</p>
-                {index === 0 ? <div className="ares-story-title-caption"><span>HUMAN DIGITAL TWIN</span><span>01 HUMAN / 06 SYSTEMS</span></div> : (
+                {index === 0 ? <>
+                  <div className="ares-story-title-caption"><span>HUMAN DIGITAL TWIN</span><span>01 HUMAN / 06 SYSTEMS</span></div>
+                  <DeveloperCards />
+                </> : (
                   <div className="ares-story-readings">
                     {slide.metrics.map((metric) => (
                       <div key={metric.label} className="ares-story-reading">
@@ -277,7 +293,7 @@ export function PresentationStory({
                   </div>
                 )}
                 {index === STORY_CHAPTER_COUNT - 1 && (
-                  <button type="button" onClick={openConsole} className="ares-story-action" tabIndex={clone ? -1 : undefined}>
+                  <button type="button" onClick={openConsole} className="ares-story-action" disabled={leaving} aria-busy={leaving} tabIndex={clone ? -1 : undefined}>
                     OPEN CMO CONSOLE <ArrowUpRight size={16} aria-hidden="true" />
                   </button>
                 )}
@@ -301,7 +317,7 @@ export function PresentationStory({
         <div className="ares-story-settings">
           <button type="button" className="ares-motion-setting" aria-pressed={reducedMotion} onClick={() => setReducedMotion((value) => !value)}>{reducedMotion ? "FULL MOTION" : "REDUCE MOTION"}</button>
         </div>
-        <div className="ares-story-scroll-cue" aria-hidden="true"><span>{slideIndex === STORY_CHAPTER_COUNT - 1 ? "SCROLL TO RETURN" : "SCROLL TO EXPLORE · DRAG TO ROTATE"}</span><ArrowDown size={13} /></div>
+        <div className="ares-story-scroll-cue" aria-hidden="true"><span>{slideIndex === STORY_CHAPTER_COUNT - 1 ? "KEEP SCROLLING · BACK TO THE BEGINNING" : slideIndex === 0 ? "SCROLL TO EXPLORE THE MISSION" : "SCROLL TO EXPLORE · DRAG TO ROTATE"}</span><ArrowDown size={13} /></div>
         <span className="ares-story-counter">{String(slideIndex + 1).padStart(2, "0")}<span> / 07</span></span>
       </footer>
     </div>

@@ -1,24 +1,25 @@
-/**
- * Procedural Web Audio API synthesizer for ARES-MED OS.
- * Provides subtle spacecraft ambient hum and tactile UI/camera feedback
- * without external audio asset downloads.
- */
+import { pickMusicTrack } from "@/lib/musicPlaylist";
+
+/** Local background music plus procedural UI/camera feedback. */
 
 const BG_PLAYLIST = [
-  "/audio/dark-soul.m4a",
-  "/audio/deep-techno-ambience.mp3",
+  "/music/i-saac-charon.mp3",
+  "/music/max-brhon-dark-soul.m4a",
 ];
 
-class AresSoundEngine {
+export class AresSoundEngine {
   private ctx: AudioContext | null = null;
   private enabled = false;
   private ambientGain: GainNode | null = null;
   private ambientOscA: OscillatorNode | null = null;
   private ambientOscB: OscillatorNode | null = null;
   private bgAudio: HTMLAudioElement | null = null;
-  private bgTrackIndex = 0;
+  private bgTracks = [...BG_PLAYLIST];
+  private bgCurrentTrack: string | null = null;
+  private bgFailedTracks = new Set<string>();
+  private bgPlayVersion = 0;
+  private autoplayInitialized = false;
   private bgFadeTimer: number | null = null;
-  private bgUnavailable = false;
   private unlockHandler: (() => void) | null = null;
 
   private ensureContext(): AudioContext | null {
@@ -42,13 +43,32 @@ class AresSoundEngine {
   }
 
   public initAutoplay(): boolean {
-    // Background music disabled by project preference; UI SFX remain available on explicit toggle.
-    return false;
+    if (typeof window === "undefined") return false;
+    if (!this.autoplayInitialized) {
+      this.autoplayInitialized = true;
+      this.enabled = true;
+      this.startBackgroundOrAmbient();
+      void this.loadMusicFolder();
+    }
+    return this.enabled;
+  }
+
+  private async loadMusicFolder(): Promise<void> {
+    try {
+      const response = await fetch("/api/music");
+      if (!response.ok) return;
+      const data = await response.json() as { tracks?: unknown };
+      if (!Array.isArray(data.tracks)) return;
+      this.bgTracks = data.tracks.filter((track): track is string => typeof track === "string" && track.startsWith("/music/"));
+      if (this.enabled && (!this.bgCurrentTrack || this.bgFailedTracks.has(this.bgCurrentTrack))) this.nextBackgroundTrack();
+    } catch {
+      // Known local files still work if discovery is temporarily unavailable.
+    }
   }
 
   private clearAutoplayUnlock(): void {
     if (typeof window === "undefined" || !this.unlockHandler) return;
-    for (const evt of ["pointerdown", "keydown", "touchstart", "wheel"] as const) {
+    for (const evt of ["pointerdown", "keydown", "touchstart"] as const) {
       window.removeEventListener(evt, this.unlockHandler, true);
     }
     this.unlockHandler = null;
@@ -62,7 +82,7 @@ class AresSoundEngine {
         this.startBackgroundOrAmbient(false);
       }
     };
-    for (const evt of ["pointerdown", "keydown", "touchstart", "wheel"] as const) {
+    for (const evt of ["pointerdown", "keydown", "touchstart"] as const) {
       window.addEventListener(evt, this.unlockHandler, { capture: true, passive: true });
     }
   }
@@ -82,8 +102,49 @@ class AresSoundEngine {
   }
 
   private startBackgroundOrAmbient(_fromAutoplay = false): void {
-    // Background music / ambient drone intentionally disabled.
-    return;
+    if (!this.enabled || typeof window === "undefined" || typeof Audio === "undefined") return;
+    if (!this.bgAudio) {
+      this.bgAudio = new Audio();
+      this.bgAudio.preload = "auto";
+      this.bgAudio.loop = false;
+      this.bgAudio.volume = 0;
+      this.bgAudio.onended = () => { if (this.enabled) this.nextBackgroundTrack(); };
+      this.bgAudio.onerror = () => {
+        if (this.bgCurrentTrack) this.bgFailedTracks.add(this.bgCurrentTrack);
+        if (this.enabled) this.nextBackgroundTrack();
+      };
+    }
+    if (!this.bgCurrentTrack) {
+      this.nextBackgroundTrack();
+      return;
+    }
+    const version = ++this.bgPlayVersion;
+    const audio = this.bgAudio;
+    void audio.play().then(() => {
+      if (!this.enabled || version !== this.bgPlayVersion) return;
+      this.clearAutoplayUnlock();
+      this.fadeAudioTo(audio, 0.34, 900);
+    }).catch((error: unknown) => {
+      if (!this.enabled || version !== this.bgPlayVersion) return;
+      const name = error && typeof error === "object" && "name" in error ? error.name : "";
+      if (name === "NotAllowedError") this.armAutoplayUnlock();
+      else if (name !== "AbortError") {
+        if (this.bgCurrentTrack) this.bgFailedTracks.add(this.bgCurrentTrack);
+        this.nextBackgroundTrack();
+      }
+    });
+  }
+
+  private nextBackgroundTrack(): void {
+    const available = this.bgTracks.filter((track) => !this.bgFailedTracks.has(track));
+    const next = pickMusicTrack(available, this.bgCurrentTrack);
+    if (!next || !this.enabled) return;
+    if (!this.bgAudio) { this.startBackgroundOrAmbient(); return; }
+    if (this.bgFadeTimer !== null) { window.clearInterval(this.bgFadeTimer); this.bgFadeTimer = null; }
+    this.bgAudio.volume = 0;
+    this.bgCurrentTrack = next;
+    this.bgAudio.src = next;
+    this.startBackgroundOrAmbient();
   }
 
   private fadeAudioTo(
@@ -115,6 +176,7 @@ class AresSoundEngine {
   }
 
   private stopBgAudio(): void {
+    this.bgPlayVersion++;
     if (!this.bgAudio) return;
     const audio = this.bgAudio;
     this.fadeAudioTo(audio, 0, 320, () => {
