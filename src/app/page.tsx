@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { AutonomousCmoPanel } from "@/components/AutonomousCmoPanel";
 import { BioTwinBodyMap } from "@/components/BioTwinBodyMap";
+import { ResizablePanels } from "@/components/ResizablePanels";
 import { HardwareBridgeDrawer } from "@/components/HardwareBridgeDrawer";
 import { PresentationView } from "@/components/PresentationView";
 import { RoutineGamificationBar } from "@/components/RoutineGamificationBar";
@@ -899,9 +900,9 @@ export default function HomePage() {
     activeCrewProfile.callsign;
 
   return (
-    <div id="cmo-console" tabIndex={-1} className="ares-console-enter flex min-h-screen flex-col bg-[#06070a] text-white outline-none lg:h-dvh lg:overflow-hidden">
-      {/* ZONE A: Deep-Space Glassmorphic Top Command Bar */}
-      <header className="shrink-0 border-b border-white/[0.08] bg-[#070b14]/90 px-3 py-1.5 backdrop-blur-md lg:px-4">
+    <div id="cmo-console" tabIndex={-1} className="ares-console-enter flex min-h-screen flex-col bg-[#0a0a0b] text-white outline-none lg:h-dvh lg:overflow-hidden">
+      {/* ZONE A: Monochrome Top Command Bar */}
+      <header className="shrink-0 border-b border-white/[0.06] bg-[#111113] px-3 py-1.5 lg:px-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           {/* Left: Brand Identity + Environment + Crew Menu + Pre-Flight Lab */}
           <div className="flex flex-wrap items-center gap-1.5">
@@ -1217,8 +1218,8 @@ export default function HomePage() {
 
       {/* ZONE B: Full-Viewport Center 2-Column Console */}
       <main className="min-h-0 flex-1 overflow-y-auto p-2.5 lg:overflow-hidden lg:p-3">
-        <div className="grid grid-cols-1 gap-2.5 lg:h-full lg:grid-cols-12">
-          <div className="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-white/[0.06] bg-[#111113] lg:col-span-7 lg:h-full xl:col-span-8">
+        <ResizablePanels label="Resize BioTwin and CMO panels" defaultSize="66.6667%" minPrimary={560} minSecondary={340} className="ares-console-workspace">
+          <div className="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-white/[0.06] bg-[#111113] lg:h-full">
             <BioTwinBodyMap
               assessments={evaluation.systems}
               cascades={evaluation.activeCascades}
@@ -1232,7 +1233,7 @@ export default function HomePage() {
             />
           </div>
 
-          <div className="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-white/[0.06] bg-[#111113] lg:col-span-5 lg:h-full xl:col-span-4">
+          <div className="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-white/[0.06] bg-[#111113] lg:h-full">
             <AutonomousCmoPanel
               selectedSystem={selectedSystem}
               evaluation={evaluation}
@@ -1257,13 +1258,13 @@ export default function HomePage() {
               inferenceConfig={crewStore.inferenceConfig}
             />
           </div>
-        </div>
+        </ResizablePanels>
       </main>
 
       {/* ZONE C: Persistent 6-Channel Bottom Telemetry Dock */}
       <footer
         aria-label="Live physiological and environmental telemetry strip"
-        className="shrink-0 border-t border-white/[0.08] bg-[#070b14]/90 px-3 py-1.5 backdrop-blur-md lg:px-4"
+        className="shrink-0 border-t border-white/[0.06] bg-[#111113] px-3 py-1.5 lg:px-4"
       >
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           {telemetryStripChannels.map((ch) => {
@@ -1287,10 +1288,10 @@ export default function HomePage() {
                     handleSelectSystem(ch.focusSystem);
                   }
                 }}
-                className={`flex min-w-0 cursor-pointer flex-col justify-between rounded-xl border px-2.5 py-1.5 backdrop-blur-md transition ${
+                className={`flex min-w-0 cursor-pointer flex-col justify-between rounded-xl border px-2.5 py-1.5 transition ${
                   isSelected
-                    ? "border-sky-400/35 bg-[#0c1424]/85"
-                    : "border-white/[0.08] bg-[#0a0f1a]/65 hover:border-white/20"
+                    ? "border-white/20 bg-[#1c1c1f]"
+                    : "border-white/[0.06] bg-[#151517] hover:border-white/15 hover:bg-[#1a1a1d]"
                 }`}
               >
                 <div className="flex items-center justify-between gap-1.5">

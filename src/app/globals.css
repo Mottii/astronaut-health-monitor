@@ -98,6 +98,23 @@ input[type="range"]::-moz-range-thumb {
   background: #3f3f46;
 }
 
+/* Desktop console panes share the same neutral chrome and adjustable dividers. */
+.ares-split { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.ares-console-workspace { gap: 10px; }
+.ares-split-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.ares-split-handle { display: none; }
+@media (min-width: 1024px) {
+  .ares-split { display: grid; grid-template-columns: clamp(var(--panel-min),var(--panel-size),var(--panel-max)) 10px minmax(0,1fr); grid-template-rows: minmax(0,1fr); gap: 0; height: 100%; flex: 1; }
+  .ares-split-handle { position: relative; z-index: 2; display: flex; align-items: center; justify-content: center; align-self: stretch; cursor: col-resize; touch-action: none; outline: none; }
+  .ares-split-handle::before { content: ""; position: absolute; inset: 0 4px; background: #ffffff12; transition: background 160ms; }
+  .ares-split-handle::after { content: ""; position: absolute; inset: 0 -3px; }
+  .ares-split-handle span { z-index: 1; width: 3px; height: 30px; border-radius: 4px; background: #55555e; transition: background 160ms; }
+  .ares-split-handle:hover::before, .ares-split-handle:focus-visible::before, .ares-split[data-resizing="true"] > .ares-split-handle::before { background: #ffffff45; }
+  .ares-split-handle:hover span, .ares-split-handle:focus-visible span, .ares-split[data-resizing="true"] > .ares-split-handle span { background: #e4e4e7; }
+  .ares-split-handle:focus-visible { box-shadow: inset 0 0 0 1px #ffffff70; border-radius: 4px; }
+  .ares-split[data-resizing="true"], .ares-split[data-resizing="true"] * { cursor: col-resize !important; user-select: none !important; }
+}
+
 /* The briefing is a native vertical story over one persistent 3D scene. */
 .ares-story { position: relative; height: 100dvh; width: 100%; overflow: hidden; isolation: isolate; background: #06070a; color: #edf0f2; --story-progress: 0; }
 .ares-story-scene, .ares-story-shade { position: absolute; inset: 0; }
@@ -322,8 +339,8 @@ input[type="range"]::-moz-range-thumb {
 @keyframes ares-fly-up { from { opacity: 0; transform: translateY(44px); } to { opacity: 1; transform: none; } }
 .ares-console-enter > header > div > :first-child { animation: ares-fly-left 640ms cubic-bezier(.22,1,.36,1) 60ms both; }
 .ares-console-enter > header > div > :last-child:not(:first-child) { animation: ares-fly-right 640ms cubic-bezier(.22,1,.36,1) 100ms both; }
-.ares-console-enter > main > div > :nth-child(1) { animation: ares-fly-left 760ms cubic-bezier(.22,1,.36,1) 140ms both; }
-.ares-console-enter > main > div > :nth-child(2) { animation: ares-fly-right 760ms cubic-bezier(.22,1,.36,1) 200ms both; }
+.ares-console-enter > main > .ares-split > .ares-split-panel:first-child { animation: ares-fly-left 760ms cubic-bezier(.22,1,.36,1) 140ms both; }
+.ares-console-enter > main > .ares-split > .ares-split-panel:last-child { animation: ares-fly-right 760ms cubic-bezier(.22,1,.36,1) 200ms both; }
 .ares-console-enter > footer > div > * { animation: ares-fly-up 640ms cubic-bezier(.22,1,.36,1) both; }
 .ares-console-enter > footer > div > :nth-child(1) { animation-delay: 300ms; }
 .ares-console-enter > footer > div > :nth-child(2) { animation-delay: 350ms; }

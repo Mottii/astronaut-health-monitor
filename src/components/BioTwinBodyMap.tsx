@@ -12,6 +12,7 @@ import {
   type ClinicalVisualMode,
 } from "@/components/BioTwin3DStage";
 import { BODY_SYSTEM_METADATA } from "@/data/nasaHrpData";
+import { ResizablePanels } from "@/components/ResizablePanels";
 import type {
   BodySystemId,
   CascadeLink,
@@ -281,10 +282,11 @@ export function BioTwinBodyMap({
   return (
     <section
       aria-label="BioTwin Anatomical Body Map"
-      className="flex min-h-0 flex-col overflow-hidden bg-[#0f0f10] lg:h-full lg:flex-row"
+      className="flex min-h-0 flex-col overflow-hidden bg-[#0f0f10] lg:h-full"
     >
+      <ResizablePanels label="Resize organ list and anatomical viewport" defaultSize="244px" minPrimary={192} minSecondary={320} maxPrimary={360}>
       {/* Left Sidebar (Restrained Monochrome Organ Nodes & Domino Feed) */}
-      <aside className="flex shrink-0 flex-col justify-between border-b border-white/[0.06] bg-[#111113] p-3.5 lg:w-[244px] xl:w-[264px] lg:overflow-y-auto lg:border-r lg:border-b-0">
+      <aside className="flex shrink-0 flex-col justify-between border-b border-white/[0.06] bg-[#111113] p-3.5 lg:h-full lg:overflow-y-auto lg:border-b-0">
         <div>
           <div className="mb-3 flex items-center justify-between">
             <span className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-[#7e828a]">
@@ -955,6 +957,7 @@ export function BioTwinBodyMap({
           </div>
         </div>
       </div>
+      </ResizablePanels>
     </section>
   );
 }
