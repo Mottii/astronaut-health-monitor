@@ -3,7 +3,7 @@
  *
  * To personalise a card: set `nickname`, `role`, and drop a square-ish portrait into
  * `public/avatars/` and point `avatar` at it (e.g. "/avatars/dev-1.jpg").
- * Without an avatar the card shows an ARES monogram in the same cutout.
+ * Without an avatar the card uses a minimal numbered editorial layout.
  */
 export interface Developer {
   id: string;

@@ -25,6 +25,29 @@ export function wrapStoryProgress(progress: number): number {
   return wrapped < 0 ? wrapped + STORY_CHAPTER_COUNT : wrapped === 0 ? 0 : wrapped;
 }
 
+/** Keep the native scroller in the middle copy, without waiting for the camera. */
+export function rebaseStoryProgress(progress: number): { progress: number; shift: number } {
+  const shift = progress >= STORY_CHAPTER_COUNT
+    ? Math.floor(progress / STORY_CHAPTER_COUNT) * STORY_CHAPTER_COUNT
+    : progress <= -1
+      ? (Math.ceil((progress + 1) / STORY_CHAPTER_COUNT) - 1) * STORY_CHAPTER_COUNT
+      : 0;
+  return { progress: progress - shift, shift };
+}
+
+/** Keep animation time continuous when the DOM jumps between identical scroll copies. */
+export function unwrapStoryProgress(previous: number, physical: number): number {
+  return physical + Math.round((previous - physical) / STORY_CHAPTER_COUNT) * STORY_CHAPTER_COUNT;
+}
+
+/** The title has editorial copy in place of anatomy; both joins use the same fade. */
+export function storyTitlePresence(progress: number): number {
+  const wrapped = wrapStoryProgress(progress);
+  const distance = Math.min(wrapped, STORY_CHAPTER_COUNT - wrapped);
+  const t = Math.min(1, distance / 0.85);
+  return 1 - t * t * (3 - 2 * t);
+}
+
 export function storyScrollTarget(current: number, requested: number): number {
   if (current === STORY_CHAPTER_COUNT - 1 && requested === 0) return STORY_CHAPTER_COUNT;
   if (current === 0 && requested === STORY_CHAPTER_COUNT - 1) return -1;
@@ -58,4 +81,13 @@ export function storyFocus(progress: number): { overview: number; systems: Recor
 
 export function followScroll(current: number, target: number, deltaSeconds: number): number {
   return current + (target - current) * (1 - Math.exp(-7.5 * Math.max(0, Math.min(deltaSeconds, 0.05))));
+}
+
+/** Gentle idle yaw plus a stronger, continuous turn as each chapter passes. */
+export function sampleBodyTurn(progress: number, time: number, reducedMotion = false): number {
+  if (reducedMotion) return 0;
+  const phase = wrapStoryProgress(progress);
+  return Math.sin(time*0.24)*0.12 + Math.sin(time*0.11)*0.035
+    + Math.sin(phase*Math.PI*2/STORY_CHAPTER_COUNT)*0.12
+    + Math.sin(phase*Math.PI*2)*0.16;
 }

@@ -34,7 +34,7 @@ export const PRESENTATION_SLIDES: PresentationSlide[] = [
     chapterLabel: "ARES-MED",
     kicker: "AUTONOMOUS MEDICINE / DEEP SPACE",
     title: "ARES-MED",
-    summary: "A human digital twin. Autonomous care. Wherever the mission takes us.",
+    summary: "A digital twin for astronaut health. Six connected body systems. One clear view of the crew’s wellbeing.",
     ctaLabel: "EXPLORE THE MISSION",
     scenarioId: "nominal",
     focusSystem: "cardiovascular",

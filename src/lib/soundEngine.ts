@@ -1,25 +1,34 @@
-/**
- * Procedural Web Audio API synthesizer for ARES-MED OS.
- * Provides subtle spacecraft ambient hum and tactile UI/camera feedback
- * without external audio asset downloads.
- */
+import { pickMusicTrack } from "@/lib/musicPlaylist";
+
+/** Local background music plus procedural UI/camera feedback. */
 
 const BG_PLAYLIST = [
-  "/audio/dark-soul.m4a",
-  "/audio/deep-techno-ambience.mp3",
+  "/music/i-saac-charon.mp3",
+  "/music/max-brhon-dark-soul.m4a",
 ];
+const FIRST_TRACK = "/music/i-saac-charon.mp3";
+const PLAYBACK_REQUEST_VOLUME = 0.0001;
+const MAX_MUSIC_VOLUME = 1;
+const MUSIC_FADE_MS = 3200;
 
-class AresSoundEngine {
+export class AresSoundEngine {
   private ctx: AudioContext | null = null;
-  private enabled = false;
+  private enabled = true;
+  private presentationActive = true;
   private ambientGain: GainNode | null = null;
   private ambientOscA: OscillatorNode | null = null;
   private ambientOscB: OscillatorNode | null = null;
   private bgAudio: HTMLAudioElement | null = null;
-  private bgTrackIndex = 0;
+  private bgTracks = [...BG_PLAYLIST];
+  private bgCurrentTrack: string | null = null;
+  private bgFailedTracks = new Set<string>();
+  private bgPlayVersion = 0;
+  private autoplayInitialized = false;
+  private autoplayBlocked = false;
+  private playing = false;
+  private listeners = new Set<() => void>();
   private bgFadeTimer: number | null = null;
-  private bgUnavailable = false;
-  private unlockHandler: (() => void) | null = null;
+  private unlockHandler: ((event?: Event) => void) | null = null;
 
   private ensureContext(): AudioContext | null {
     if (typeof window === "undefined") return null;
@@ -29,7 +38,7 @@ class AresSoundEngine {
         (window as unknown as { webkitAudioContext?: typeof AudioContext })
           .webkitAudioContext;
       if (!AudioCtx) return null;
-      this.ctx = new AudioCtx();
+      try { this.ctx = new AudioCtx(); } catch { return null; }
     }
     if (this.ctx.state === "suspended") {
       void this.ctx.resume().catch(() => {});
@@ -41,14 +50,60 @@ class AresSoundEngine {
     return this.enabled;
   }
 
+  public isPlaying(): boolean { return this.playing; }
+
+  public subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  private setPlaying(next: boolean): void {
+    if (this.playing === next) return;
+    this.playing = next;
+    this.listeners.forEach((listener) => listener());
+  }
+
   public initAutoplay(): boolean {
-    // Background music disabled by project preference; UI SFX remain available on explicit toggle.
-    return false;
+    if (typeof window === "undefined") return false;
+    if (!this.autoplayInitialized) {
+      this.autoplayInitialized = true;
+      this.startBackgroundMusic();
+      void this.loadMusicFolder();
+    }
+    return this.enabled;
+  }
+
+  public enterPresentation(): boolean {
+    this.presentationActive = true;
+    this.cancelBgFade();
+    if (!this.autoplayInitialized) return this.initAutoplay();
+    if (this.enabled) this.startBackgroundMusic();
+    return this.enabled;
+  }
+
+  public leavePresentation(): void {
+    if (!this.presentationActive) return;
+    this.presentationActive = false;
+    this.clearAutoplayUnlock();
+    this.stopBgAudio(true);
+  }
+
+  private async loadMusicFolder(): Promise<void> {
+    try {
+      const response = await fetch("/api/music");
+      if (!response.ok) return;
+      const data = await response.json() as { tracks?: unknown };
+      if (!Array.isArray(data.tracks)) return;
+      this.bgTracks = data.tracks.filter((track): track is string => typeof track === "string" && track.startsWith("/music/"));
+      if (this.enabled && (!this.bgCurrentTrack || this.bgFailedTracks.has(this.bgCurrentTrack))) this.nextBackgroundTrack();
+    } catch {
+      // Known local files still work if discovery is temporarily unavailable.
+    }
   }
 
   private clearAutoplayUnlock(): void {
     if (typeof window === "undefined" || !this.unlockHandler) return;
-    for (const evt of ["pointerdown", "keydown", "touchstart", "wheel"] as const) {
+    for (const evt of ["pointerdown", "keydown", "touchstart"] as const) {
       window.removeEventListener(evt, this.unlockHandler, true);
     }
     this.unlockHandler = null;
@@ -56,13 +111,16 @@ class AresSoundEngine {
 
   private armAutoplayUnlock(): void {
     if (typeof window === "undefined" || this.unlockHandler) return;
-    this.unlockHandler = () => {
+    this.unlockHandler = (event) => {
+      // Let the sound button handle its own click; unlocking on pointerdown would mute it on click.
+      const target = event?.target as Element | null | undefined;
+      if (target && typeof target.closest === "function" && target.closest("[data-sound-toggle]")) return;
       this.clearAutoplayUnlock();
       if (this.enabled) {
-        this.startBackgroundOrAmbient(false);
+        this.startBackgroundMusic();
       }
     };
-    for (const evt of ["pointerdown", "keydown", "touchstart", "wheel"] as const) {
+    for (const evt of ["pointerdown", "keydown", "touchstart"] as const) {
       window.addEventListener(evt, this.unlockHandler, { capture: true, passive: true });
     }
   }
@@ -71,19 +129,77 @@ class AresSoundEngine {
     this.enabled = next;
     if (next) {
       this.clearAutoplayUnlock();
-      this.startBackgroundOrAmbient(false);
+      this.startBackgroundMusic();
       this.playHoverTick();
     } else {
+      this.autoplayBlocked = false;
       this.clearAutoplayUnlock();
       this.stopBgAudio();
       this.stopAmbient();
     }
+    this.listeners.forEach((listener) => listener());
     return this.enabled;
   }
 
-  private startBackgroundOrAmbient(_fromAutoplay = false): void {
-    // Background music / ambient drone intentionally disabled.
-    return;
+  private startBackgroundMusic(): void {
+    if (!this.enabled || !this.presentationActive || typeof window === "undefined" || typeof Audio === "undefined") return;
+    if (!this.bgAudio) {
+      this.bgAudio = new Audio();
+      this.bgAudio.preload = "auto";
+      this.bgAudio.loop = false;
+      this.bgAudio.volume = PLAYBACK_REQUEST_VOLUME;
+      this.bgAudio.autoplay = true;
+      this.bgAudio.onended = () => { if (this.enabled) this.nextBackgroundTrack(); };
+      this.bgAudio.onerror = () => {
+        this.setPlaying(false);
+        if (this.bgCurrentTrack) this.bgFailedTracks.add(this.bgCurrentTrack);
+        if (this.enabled) this.nextBackgroundTrack();
+      };
+    }
+    if (!this.bgCurrentTrack) {
+      this.nextBackgroundTrack();
+      return;
+    }
+    const version = ++this.bgPlayVersion;
+    const audio = this.bgAudio;
+    // Background music uses native HTML audio only. A suspended Web Audio context
+    // for interface effects must never prevent an otherwise permitted music autoplay.
+    if (audio.volume === 0) audio.volume = PLAYBACK_REQUEST_VOLUME;
+    void audio.play().then(() => {
+      if (!this.enabled || !this.presentationActive || version !== this.bgPlayVersion) return;
+      this.autoplayBlocked = false;
+      this.clearAutoplayUnlock();
+      audio.volume = 0;
+      this.fadeAudioTo(audio,MAX_MUSIC_VOLUME,MUSIC_FADE_MS);
+      this.setPlaying(true);
+    }).catch((error: unknown) => {
+      if (!this.enabled || version !== this.bgPlayVersion) return;
+      const name = error && typeof error === "object" && "name" in error ? error.name : "";
+      if (name === "NotAllowedError") {
+        this.setPlaying(false);
+        this.autoplayBlocked = true;
+        this.armAutoplayUnlock();
+      }
+      else if (name !== "AbortError") {
+        if (this.bgCurrentTrack) this.bgFailedTracks.add(this.bgCurrentTrack);
+        this.nextBackgroundTrack();
+      }
+    });
+  }
+
+  private nextBackgroundTrack(): void {
+    const available = this.bgTracks.filter((track) => !this.bgFailedTracks.has(track));
+    const next = !this.bgCurrentTrack && available.includes(FIRST_TRACK)
+      ? FIRST_TRACK
+      : pickMusicTrack(available, this.bgCurrentTrack);
+    if (!next || !this.enabled || !this.presentationActive) return;
+    this.setPlaying(false);
+    if (!this.bgAudio) { this.startBackgroundMusic(); return; }
+    this.cancelBgFade();
+    this.bgAudio.volume = PLAYBACK_REQUEST_VOLUME;
+    this.bgCurrentTrack = next;
+    this.bgAudio.src = next;
+    this.startBackgroundMusic();
   }
 
   private fadeAudioTo(
@@ -92,17 +208,13 @@ class AresSoundEngine {
     durationMs: number,
     onDone?: () => void
   ): void {
-    if (this.bgFadeTimer !== null) {
-      window.clearInterval(this.bgFadeTimer);
-      this.bgFadeTimer = null;
-    }
+    this.cancelBgFade();
     const startVol = audio.volume;
-    const steps = 20;
+    const steps = Math.max(1,Math.min(80,Math.floor(durationMs/16)));
     const stepMs = Math.max(16, Math.round(durationMs / steps));
-    let step = 0;
+    const startedAt = Date.now();
     this.bgFadeTimer = window.setInterval(() => {
-      step += 1;
-      const t = Math.min(1, step / steps);
+      const t = Math.min(1,(Date.now()-startedAt)/durationMs);
       audio.volume = Math.max(0, Math.min(1, startVol + (targetVol - startVol) * t));
       if (t >= 1) {
         if (this.bgFadeTimer !== null) {
@@ -114,17 +226,27 @@ class AresSoundEngine {
     }, stepMs);
   }
 
-  private stopBgAudio(): void {
+  private cancelBgFade(): void {
+    if (this.bgFadeTimer === null) return;
+    window.clearInterval(this.bgFadeTimer);
+    window.clearTimeout(this.bgFadeTimer);
+    this.bgFadeTimer = null;
+  }
+
+  private stopBgAudio(forcePause = false): void {
+    this.setPlaying(false);
+    this.bgPlayVersion++;
     if (!this.bgAudio) return;
     const audio = this.bgAudio;
     this.fadeAudioTo(audio, 0, 320, () => {
-      if (!this.enabled) {
+      if (!this.enabled || (forcePause && !this.presentationActive)) {
         audio.pause();
       }
     });
   }
 
   public toggle(): boolean {
+    if (this.enabled && !this.playing) return this.setEnabled(true);
     return this.setEnabled(!this.enabled);
   }
 

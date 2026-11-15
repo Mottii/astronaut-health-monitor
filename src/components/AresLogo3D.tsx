@@ -1,7 +1,11 @@
 "use client";
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { buildBrandMarkGeometry } from "@/lib/aresLogoGeometry";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 
 export interface AresLogo3DProps {
   className?: string;
@@ -22,7 +26,7 @@ const HOLO_VERTEX_SHADER = `
   }
 `;
 
-// Matches BioTwin3DStage's translucent X-ray/hologram body shell shader.
+// Only grazing surfaces catch light: front faces stay empty, like a hollow hologram.
 const HOLO_FRAGMENT_SHADER = `
   uniform float uTime;
 
@@ -34,148 +38,23 @@ const HOLO_FRAGMENT_SHADER = `
     vec3 N = normalize(vNormalW);
     vec3 V = normalize(vViewDir);
     float ndotv = clamp(abs(dot(N, V)), 0.0, 1.0);
-    float fresnel = pow(1.0 - ndotv, 1.75);
+    float fresnel = pow(1.0 - ndotv, 3.2);
 
     float scanline = 0.5 + 0.5 * sin(vWorldPos.y * 140.0 - uTime * 1.4);
     float sweepY = mod(uTime * 0.45, 2.6) - 1.3;
-    float sweep = exp(-abs(vWorldPos.y - sweepY) * 14.0) * 0.42;
+    float sweep = exp(-abs(vWorldPos.y - sweepY) * 18.0);
 
-    vec3 obsidianBase = vec3(0.025, 0.032, 0.048);
-    vec3 cyanRim = vec3(0.32, 0.80, 0.98);
-    vec3 silverRim = vec3(0.90, 0.95, 1.0);
-    vec3 rimCol = mix(cyanRim, silverRim, smoothstep(0.12, 0.82, fresnel));
+    vec3 rimCol = vec3(1.0);
 
-    vec3 col = mix(obsidianBase, rimCol, fresnel * 0.96);
-    col += vec3(0.78, 0.86, 0.94) * sweep * (0.4 + fresnel * 0.65);
-    col += vec3(0.06, 0.11, 0.16) * scanline * fresnel;
-
-    float alpha = clamp(mix(0.035, 0.56, fresnel) + sweep * 0.1, 0.035, 0.68);
-    gl_FragColor = vec4(col, alpha);
+    float alpha = fresnel * (0.10 + scanline * 0.025 + sweep * 0.06);
+    gl_FragColor = vec4(rimCol, alpha);
   }
 `;
 
-/**
- * Exact 3D counterpart of the ARES-MED header brand mark (`viewBox="0 0 32 32"`):
- * a chevron "A" sliced by an orbital arc into an upper apex and two lower legs.
- */
-function buildBrandMarkGeometry(): THREE.BufferGeometry[] {
-  const to3D = (x: number, y: number): [number, number] => [
-    (x - 16.0) / 11.0,
-    (16.0 - y) / 11.0,
-  ];
-
-  const arcY = (x: number): number => {
-    const t = (x - 4) / 25;
-    return 21.0 * (1 - t) * (1 - t) + 2 * 13.6 * t * (1 - t) + 10.2 * t * t;
-  };
-
-  const arcSlope = (x: number): number => {
-    const eps = 0.05;
-    return (arcY(x + eps) - arcY(x - eps)) / (2 * eps);
-  };
-
-  const arcOffset = (x: number, d: number): [number, number] => {
-    const dy = arcSlope(x);
-    const len = Math.hypot(1, dy);
-    return [x + (-dy / len) * d, arcY(x) + (1 / len) * d];
-  };
-
-  const intersectLineWithArcOffset = (
-    x1: number,
-    y1: number,
-    x2: number,
-    y2: number,
-    d: number,
-  ): [number, number] => {
-    const lineY = (x: number) => y1 + ((y2 - y1) * (x - x1)) / (x2 - x1);
-    let lo = Math.min(x1, x2);
-    let hi = Math.max(x1, x2);
-    for (let i = 0; i < 32; i++) {
-      const mid = (lo + hi) * 0.5;
-      const fMid = lineY(mid) - (arcY(mid) + d * Math.hypot(1, arcSlope(mid)));
-      const fLo = lineY(lo) - (arcY(lo) + d * Math.hypot(1, arcSlope(lo)));
-      if ((fMid >= 0) === (fLo >= 0)) lo = mid;
-      else hi = mid;
-    }
-    const x = (lo + hi) * 0.5;
-    return [x, lineY(x)];
-  };
-
-  const HALF_GAP = 1.25;
-  const extrudeSettings: THREE.ExtrudeGeometryOptions = {
-    depth: 0.28,
-    bevelEnabled: true,
-    bevelThickness: 0.04,
-    bevelSize: 0.032,
-    bevelSegments: 6,
-    curveSegments: 28,
-  };
-
-  const sampleArc = (xStart: number, xEnd: number, d: number, steps = 10): [number, number][] => {
-    const pts: [number, number][] = [];
-    for (let i = 1; i < steps; i++) {
-      const x = xStart + ((xEnd - xStart) * i) / steps;
-      pts.push(arcOffset(x, d));
-    }
-    return pts;
-  };
-
-  const makePart = (svgPts: [number, number][]): THREE.ExtrudeGeometry => {
-    const shape = new THREE.Shape();
-    svgPts.forEach(([x, y], idx) => {
-      const [px, py] = to3D(x, y);
-      if (idx === 0) shape.moveTo(px, py);
-      else shape.lineTo(px, py);
-    });
-    shape.closePath();
-    const geom = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-    geom.translate(0, 0, -0.14);
-    geom.computeVertexNormals();
-    return geom;
-  };
-
-  const uOL = intersectLineWithArcOffset(4, 26, 14.5, 6, -HALF_GAP);
-  const uIL = intersectLineWithArcOffset(9.2, 26, 16.5, 11.4, -HALF_GAP);
-  const uIR = intersectLineWithArcOffset(16.5, 11.4, 23.2, 26, -HALF_GAP);
-  const uOR = intersectLineWithArcOffset(18.5, 6, 28, 26, -HALF_GAP);
-
-  const apexGeom = makePart([
-    uOL,
-    [14.5, 6],
-    [18.5, 6],
-    uOR,
-    ...sampleArc(uOR[0], uIR[0], -HALF_GAP),
-    uIR,
-    [16.5, 11.4],
-    uIL,
-    ...sampleArc(uIL[0], uOL[0], -HALF_GAP),
-  ]);
-
-  const lOL = intersectLineWithArcOffset(4, 26, 14.5, 6, HALF_GAP);
-  const lIL = intersectLineWithArcOffset(9.2, 26, 16.5, 11.4, HALF_GAP);
-  const leftLegGeom = makePart([
-    [4, 26],
-    lOL,
-    ...sampleArc(lOL[0], lIL[0], HALF_GAP),
-    lIL,
-    [9.2, 26],
-  ]);
-
-  const lIR = intersectLineWithArcOffset(16.5, 11.4, 23.2, 26, HALF_GAP);
-  const lOR = intersectLineWithArcOffset(18.5, 6, 28, 26, HALF_GAP);
-  const rightLegGeom = makePart([
-    [23.2, 26],
-    lIR,
-    ...sampleArc(lIR[0], lOR[0], HALF_GAP),
-    lOR,
-    [28, 26],
-  ]);
-
-  return [apexGeom, leftLegGeom, rightLegGeom];
-}
 
 export function AresLogo3D({ className, reducedMotion = false }: AresLogo3DProps) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -184,19 +63,27 @@ export function AresLogo3D({ className, reducedMotion = false }: AresLogo3DProps
     const width = host.clientWidth || 108;
     const height = host.clientHeight || 108;
 
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: true,
-      powerPreference: "high-performance",
-    });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true,
+        powerPreference: "low-power",
+      });
+    } catch {
+      setReady(false);
+      return;
+    }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(width, height, false);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.setClearColor(0x000000, 0);
+    renderer.domElement.setAttribute("aria-hidden", "true");
     host.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(30, width / height, 0.1, 30);
-    camera.position.set(0, 0, 6.2);
+    camera.position.set(0, 0, 5.5);
     camera.lookAt(0, 0, 0);
 
     const geometries = buildBrandMarkGeometry();
@@ -209,46 +96,59 @@ export function AresLogo3D({ className, reducedMotion = false }: AresLogo3DProps
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
     });
 
     const edgeGeometries: THREE.EdgesGeometry[] = [];
-    const edgeMat = new THREE.LineBasicMaterial({
-      color: 0xd4e2ec,
-      transparent: true,
-      opacity: 0.32,
-      depthWrite: false,
+    const lineGeometries: LineSegmentsGeometry[] = [];
+    // Layer screen-space contours to create a soft halo without filling the mark.
+    const lineMaterials = [
+      { width: 8, opacity: 0.025, color: 0xffffff },
+      { width: 3, opacity: 0.10, color: 0xffffff },
+      { width: 1, opacity: 0.82, color: 0xffffff },
+    ].map(({ width: lineWidth, opacity, color }) => {
+      const material = new LineMaterial({
+        color, opacity, transparent: true, depthWrite: false, depthTest: false,
+        blending: THREE.AdditiveBlending,
+      });
+      material.linewidth = lineWidth;
+      material.resolution.set(width, height);
+      return material;
     });
 
     const group = new THREE.Group();
     geometries.forEach((geom) => {
       group.add(new THREE.Mesh(geom, holoMat));
-      const edges = new THREE.EdgesGeometry(geom, 42);
+      const edges = new THREE.EdgesGeometry(geom, 35);
       edgeGeometries.push(edges);
-      group.add(new THREE.LineSegments(edges, edgeMat));
+      const lineGeometry = new LineSegmentsGeometry();
+      lineGeometry.setPositions(edges.getAttribute("position").array as Float32Array);
+      lineGeometries.push(lineGeometry);
+      lineMaterials.forEach((material) => {
+        const lines = new LineSegments2(lineGeometry, material);
+        lines.frustumCulled = false;
+        group.add(lines);
+      });
     });
     scene.add(group);
 
     let rafId = 0;
     let disposed = false;
     let inView = true;
-    let lastTime = performance.now();
-    let angle = 0;
 
     const renderFrame = (now: number) => {
       if (disposed) return;
-      const dt = Math.min((now - lastTime) / 1000, 0.05);
-      lastTime = now;
-
-      uniforms.uTime.value = now * 0.001;
+      // All loop copies share the same phase, so the emblem never jumps at a scroll seam.
+      const elapsed = reducedMotion ? 0 : now * 0.001;
 
       if (!reducedMotion) {
-        angle += dt * 0.68;
-        group.rotation.y = angle;
-        group.rotation.x = Math.sin(now * 0.001) * 0.04;
+        group.rotation.y = -0.35 + Math.sin(elapsed * 0.42) * 0.6;
+        group.rotation.x = -0.08 + Math.sin(elapsed * 0.38) * 0.09;
       } else {
-        group.rotation.y = 0;
-        group.rotation.x = 0;
+        group.rotation.y = -0.35;
+        group.rotation.x = -0.08;
       }
+      uniforms.uTime.value = elapsed;
 
       renderer.render(scene, camera);
 
@@ -259,7 +159,6 @@ export function AresLogo3D({ className, reducedMotion = false }: AresLogo3DProps
 
     const start = () => {
       cancelAnimationFrame(rafId);
-      lastTime = performance.now();
       rafId = requestAnimationFrame(renderFrame);
     };
 
@@ -283,6 +182,7 @@ export function AresLogo3D({ className, reducedMotion = false }: AresLogo3DProps
       const rect = entries[0]?.contentRect;
       if (!rect || rect.width === 0 || rect.height === 0) return;
       renderer.setSize(rect.width, rect.height, false);
+      lineMaterials.forEach((material) => material.resolution.set(rect.width, rect.height));
       camera.aspect = rect.width / rect.height;
       camera.updateProjectionMatrix();
       renderer.render(scene, camera);
@@ -290,6 +190,7 @@ export function AresLogo3D({ className, reducedMotion = false }: AresLogo3DProps
     resizeObserver.observe(host);
 
     start();
+    setReady(true);
 
     return () => {
       disposed = true;
@@ -299,8 +200,9 @@ export function AresLogo3D({ className, reducedMotion = false }: AresLogo3DProps
       document.removeEventListener("visibilitychange", onVisibility);
       geometries.forEach((g) => g.dispose());
       edgeGeometries.forEach((e) => e.dispose());
+      lineGeometries.forEach((geometry) => geometry.dispose());
       holoMat.dispose();
-      edgeMat.dispose();
+      lineMaterials.forEach((material) => material.dispose());
       renderer.dispose();
       renderer.domElement.remove();
     };
@@ -310,8 +212,18 @@ export function AresLogo3D({ className, reducedMotion = false }: AresLogo3DProps
     <div
       ref={hostRef}
       className={className}
+      data-ready={ready}
       role="img"
-      aria-label="ARES-MED 3D emblem"
-    />
+      aria-label="ARES-MED hollow 3D emblem with glowing edges"
+    >
+      <svg className="ares-logo-fallback" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+        <g stroke="currentColor" strokeWidth="0.65" strokeLinejoin="round">
+          <path d="M8 30 18.5 10h4L32 30h-4.8l-6.7-14.6L13.2 30H8Z" opacity=".3" />
+          <path d="M4 26 14.5 6h4L28 26h-4.8l-6.7-14.6L9.2 26H4Z" />
+          <path d="m4 26 4 4m6.5-24 4 4m0-4 4 4M28 26l4 4m-8.8-4 4 4m-10.7-18.6 4 4M9.2 26l4 4" opacity=".6" />
+        </g>
+        <path d="M5 20.5C11.5 14 20.5 11 29 9.5" stroke="#06070a" strokeWidth="2.5" />
+      </svg>
+    </div>
   );
 }

@@ -12,12 +12,15 @@ import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { BODY_SYSTEM_METADATA } from "@/data/nasaHrpData";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { BRIEFING_TRANSITION_MS, cameraArc, easeInOutCubic } from "@/lib/presentationMotion";
-import { sampleBriefingPose, storyFocus, STORY_CHAPTER_COUNT } from "@/lib/briefingPath";
+import { sampleBodyTurn, sampleBriefingPose, storyFocus } from "@/lib/briefingPath";
+import { createCosmicLogoTransition } from "@/lib/cosmicLogoTransition";
+import { createChapterAtmosphere } from "@/lib/chapterAtmosphere";
+import { sampleLogoMorph } from "@/lib/logoMorphMotion";
 import { createConstellationField } from "@/lib/constellationField";
 import {
   buildShellEnvelope,
-  containGeometryInsideShell,
-  containGroupInsideShell,
+  containGeometryInsideShellAsync,
+  containGroupInsideShellAsync,
   type ShellEnvelope,
 } from "@/lib/shellContainment";
 import type {
@@ -775,7 +778,8 @@ export function BioTwin3DStage({
 
     const width = Math.max(container.clientWidth, 320);
     const height = Math.max(container.clientHeight, 360);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    const renderPixelRatio = Math.min(window.devicePixelRatio || 1, cinematic ? 1.5 : 2);
+    renderer.setPixelRatio(renderPixelRatio);
     renderer.setSize(width, height, false);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -786,6 +790,14 @@ export function BioTwin3DStage({
     const scene = new THREE.Scene();
     const anatomyRoot = new THREE.Group();
     scene.add(anatomyRoot);
+    const cosmicLogo = cinematic && storyProgressRef.current
+      ? createCosmicLogoTransition(width < 761 ? 2800 : 5600, renderer.getPixelRatio())
+      : null;
+    if (cosmicLogo) scene.add(cosmicLogo.group);
+    const chapterAtmosphere = cinematic && storyProgressRef.current
+      ? createChapterAtmosphere(width < 761 ? 180 : 320, renderer.getPixelRatio())
+      : null;
+    if (chapterAtmosphere) scene.add(chapterAtmosphere.points);
     scene.background = new THREE.Color("#06070a");
     scene.fog = new THREE.FogExp2("#06070a", 0.19);
 
@@ -803,7 +815,7 @@ export function BioTwin3DStage({
     frameStory(width, height);
 
     const composer = new EffectComposer(renderer);
-    composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    composer.setPixelRatio(renderPixelRatio);
     composer.setSize(width, height);
     const renderPass = new RenderPass(scene, camera);
     const bloomPass = new UnrealBloomPass(
@@ -1377,10 +1389,13 @@ export function BioTwin3DStage({
       return group;
     };
 
+    let finishBodyPreparation = () => {};
+    const bodyPreparationReady = new Promise<void>((resolve) => { finishBodyPreparation = resolve; });
     const loader = new GLTFLoader();
     loader.load(
       "/models/ares-biotwin.glb",
-      (gltf) => {
+      async (gltf) => {
+        try {
         if (disposed) return;
         const root = gltf.scene;
         root.updateMatrixWorld(true);
@@ -1400,18 +1415,20 @@ export function BioTwin3DStage({
           shellObj.rotation.set(0, 0, 0);
           shellObj.scale.set(1, 1, 1);
           shellObj.updateMatrix();
+          cosmicLogo?.setBodyGeometry(shellObj.geometry);
           shellEnvelope = buildShellEnvelope(shellObj.geometry);
           shellObj.geometry.computeBoundingBox();
           if (shellObj.geometry.boundingBox) bodyBounds.copy(shellObj.geometry.boundingBox);
           if (shellEnvelope && pendingArmBoneGroups.length > 0) {
             for (const grp of pendingArmBoneGroups) {
-              containGroupInsideShell(grp, shellEnvelope, 0.008);
+              await containGroupInsideShellAsync(grp, shellEnvelope, 0.008, () => disposed);
             }
             pendingArmBoneGroups.length = 0;
           }
         }
 
         for (const obj of meshesToProcess) {
+          if (disposed) return;
           if (obj !== shellObj) {
             // Bake glTF hierarchy transform into geometry so world positions match ORGAN_ANCHORS
             obj.geometry.applyMatrix4(obj.matrixWorld);
@@ -1469,7 +1486,8 @@ export function BioTwin3DStage({
               stripProceduralArmTubes(obj.geometry);
             }
             if (shellEnvelope) {
-              containGeometryInsideShell(obj.geometry, shellEnvelope, 0.011);
+              await containGeometryInsideShellAsync(obj.geometry, shellEnvelope, 0.011, undefined, () => disposed);
+              if (disposed) return;
             }
             anatomyRoot.add(obj);
             continue;
@@ -1482,7 +1500,8 @@ export function BioTwin3DStage({
           if (parsed.tissueTag === "Bone") {
             // Unify pelvis, femurs, and knees with Skeletal_Frame X-ray Fresnel shader
             if (shellEnvelope) {
-              containGeometryInsideShell(obj.geometry, shellEnvelope, 0.011);
+              await containGeometryInsideShellAsync(obj.geometry, shellEnvelope, 0.011, undefined, () => disposed);
+              if (disposed) return;
             }
             obj.material = skeletonMaterial;
             obj.userData = { systemId: sysId, parsed };
@@ -1494,7 +1513,8 @@ export function BioTwin3DStage({
 
           // Ensure soft organs and vasculature sit safely inside Outer_Body_Shell even during breathing/cardiac pulse
           if (shellEnvelope) {
-            containGeometryInsideShell(obj.geometry, shellEnvelope, 0.010);
+            await containGeometryInsideShellAsync(obj.geometry, shellEnvelope, 0.010, undefined, () => disposed);
+            if (disposed) return;
           }
 
           const isShell = parsed.layer === "Shell";
@@ -1566,11 +1586,18 @@ export function BioTwin3DStage({
           organPickTargets.push(obj);
         }
 
+        if (disposed) return;
         modelLoaded = true;
         setLoadState("ready");
+        } catch {
+          if (!disposed) setLoadState("error");
+        } finally {
+          finishBodyPreparation();
+        }
       },
       undefined,
       () => {
+        finishBodyPreparation();
         if (!disposed) setLoadState("error");
       }
     );
@@ -1578,8 +1605,9 @@ export function BioTwin3DStage({
     // Replace procedural arm tubes with real anatomical humerus, radius & ulna bones aligned to body pose
     loader.load(
       "/models/skeleton.glb",
-      (gltf) => {
-        if (disposed) return;
+      async (gltf) => {
+        await bodyPreparationReady;
+        if (disposed || !modelLoaded) return;
         const root = gltf.scene;
         root.updateMatrixWorld(true);
 
@@ -1635,6 +1663,7 @@ export function BioTwin3DStage({
 
         let addedCount = 0;
         for (const spec of armSpecs) {
+          if (disposed) return;
           const meshes = spec.names
             .map((n) => byName.get(n))
             .filter((m): m is THREE.Mesh => Boolean(m));
@@ -1647,7 +1676,8 @@ export function BioTwin3DStage({
           );
           if (seg) {
             if (shellEnvelope) {
-              containGroupInsideShell(seg, shellEnvelope, 0.008);
+              await containGroupInsideShellAsync(seg, shellEnvelope, 0.008, () => disposed);
+              if (disposed) return;
             } else {
               pendingArmBoneGroups.push(seg);
             }
@@ -1820,6 +1850,8 @@ export function BioTwin3DStage({
 
     // Smooth animation loop
     const clock = new THREE.Clock();
+    let introTime = 0;
+    let logoManualTurn = 0;
     const projectedVec = new THREE.Vector3();
     const targetColor = new THREE.Color();
     const statusColorObj = new THREE.Color();
@@ -1833,18 +1865,24 @@ export function BioTwin3DStage({
       }
 
       const dt = Math.min(clock.getDelta(), 0.05);
+      introTime += Math.min(dt, 1/30);
       const t = reducedMotionRef.current ? 0 : clock.elapsedTime;
       const snapshot = liveRef.current;
-      revealUniform.value = cinematicRef.current ? THREE.MathUtils.damp(revealUniform.value, modelLoaded && !bodyHiddenRef.current ? 1 : 0, 2.8, dt) : 1;
+      const story = storyProgressRef.current;
+      const logoMotion = story ? sampleLogoMorph(story.current, clock.elapsedTime, reducedMotionRef.current) : null;
+      const revealTarget = modelLoaded && !bodyHiddenRef.current ? (logoMotion?.body ?? 1) : 0;
+      revealUniform.value = cinematicRef.current
+        ? story ? revealTarget : THREE.MathUtils.damp(revealUniform.value, revealTarget, 2.8, dt)
+        : 1;
+      anatomyRoot.visible = revealUniform.value > 0.001;
 
       // Update camera fly-to timeline (cubic ease-in-out along a shallow arc, no spring overshoot)
-      const story = storyProgressRef.current;
       const focus = story ? storyFocus(story.current) : null;
       if (story) {
         // Sample the same continuous curve at every frame. OrbitControls never rewrites this pose.
-        const idleTurn = reducedMotionRef.current ? 0 : Math.sin(t * 0.3) * 0.035 + Math.sin(story.current * Math.PI * 2 / STORY_CHAPTER_COUNT) * 0.025;
+        const idleTurn = sampleBodyTurn(story.current,t,reducedMotionRef.current);
         const requestedTurn = modelRotationRef.current?.current ?? 0;
-        anatomyRoot.rotation.y = modelLoaded ? THREE.MathUtils.damp(anatomyRoot.rotation.y, requestedTurn + idleTurn, 5, dt) : 0;
+        anatomyRoot.rotation.y = modelLoaded ? THREE.MathUtils.damp(anatomyRoot.rotation.y, requestedTurn + idleTurn, 3.8, dt) : 0;
         anatomyRoot.updateMatrixWorld(true);
         sampleBriefingPose(story.current, camera.position, storyTarget);
         storyTarget.applyMatrix4(anatomyRoot.matrixWorld);
@@ -2157,7 +2195,8 @@ export function BioTwin3DStage({
       // Update Ionizing Radiation SPE Streaks
       const rAttr = radGeo.getAttribute("position") as THREE.BufferAttribute;
       const radActive = radMsv > 1.2 || snapshot.assessments.immune_hematology.status !== "green";
-      radMat.opacity = focus ? focus.systems.immune_hematology * 0.18 : radActive ? Math.min(0.85, 0.25 + (radMsv - 0.8) * 0.22) : 0.08;
+      radPoints.visible = !story;
+      radMat.opacity = story ? 0 : radActive ? Math.min(0.85, 0.25 + (radMsv - 0.8) * 0.22) : 0.08;
       for (let i = 0; i < radCount; i++) {
         const seed = radSeeds[i];
         const prog = ((t * seed.speed + i * 0.13) % 1.0) - 0.5;
@@ -2233,6 +2272,13 @@ export function BioTwin3DStage({
         }
       }
 
+      if (story && cosmicLogo) {
+        logoManualTurn = THREE.MathUtils.damp(logoManualTurn, modelRotationRef.current?.current ?? 0, 3.8, dt);
+        cosmicLogo.update(story.current, clock.elapsedTime, camera, anatomyRoot.quaternion, reducedMotionRef.current, introTime, logoManualTurn);
+      }
+      if (story && chapterAtmosphere) {
+        chapterAtmosphere.update(story.current, t, camera, storyTarget, reducedMotionRef.current);
+      }
       composer.render();
 
       // Project 3D organ anchors to 2D callout pill positions via refs (zero React re-renders)
@@ -2286,6 +2332,7 @@ export function BioTwin3DStage({
 
     return () => {
       disposed = true;
+      finishBodyPreparation();
       cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
       controls.removeEventListener("start", cancelFlyOnUserDrag);
@@ -2343,7 +2390,7 @@ export function BioTwin3DStage({
         }}
       />
 
-      {loadState === "loading" && (
+      {loadState === "loading" && !storyProgress && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <span className="rounded-full border border-white/10 bg-[#141414]/90 px-4 py-1.5 font-mono text-xs text-[#7e828a]">
             Initializing 3D BioTwin Mesh...

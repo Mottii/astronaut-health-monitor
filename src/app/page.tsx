@@ -267,6 +267,11 @@ export default function HomePage() {
     "presentation"
   );
   const [slideIndex, setSlideIndex] = useState<number>(0);
+  useEffect(() => {
+    if (surfaceMode !== "console") return;
+    const frame = requestAnimationFrame(() => document.getElementById("cmo-console")?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [surfaceMode]);
   const [activeDrawer, setActiveDrawer] = useState<
     "none" | "trends" | "routine" | "hardware"
   >("none");
@@ -894,7 +899,7 @@ export default function HomePage() {
     activeCrewProfile.callsign;
 
   return (
-    <div className="ares-console-enter flex min-h-screen flex-col bg-[#06070a] text-white lg:h-dvh lg:overflow-hidden">
+    <div id="cmo-console" tabIndex={-1} className="ares-console-enter flex min-h-screen flex-col bg-[#06070a] text-white outline-none lg:h-dvh lg:overflow-hidden">
       {/* ZONE A: Deep-Space Glassmorphic Top Command Bar */}
       <header className="shrink-0 border-b border-white/[0.08] bg-[#070b14]/90 px-3 py-1.5 backdrop-blur-md lg:px-4">
         <div className="flex flex-wrap items-center justify-between gap-2">

@@ -130,12 +130,12 @@ function findNearestShellVertex(
  * Clamps any vertex of `geometry` that lies outside or closer than `margin` meters
  * to the Outer_Body_Shell surface inward along the local skin normal.
  */
-export function containGeometryInsideShell(
+function* containmentBatches(
   geometry: THREE.BufferGeometry,
   envelope: ShellEnvelope,
   margin = 0.01,
   matrixWorld?: THREE.Matrix4
-): ContainmentResult {
+): Generator<void, ContainmentResult> {
   const posAttr = geometry.getAttribute("position");
   if (!posAttr || posAttr.count === 0) {
     return { adjustedCount: 0, maxOriginalSignedDist: -Infinity };
@@ -151,6 +151,7 @@ export function containGeometryInsideShell(
   let maxOriginalSignedDist = -Infinity;
 
   for (let i = 0; i < posAttr.count; i++) {
+    if (i > 0 && i % 512 === 0) yield;
     worldVec.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
     if (matrixWorld) {
       worldVec.applyMatrix4(matrixWorld);
@@ -201,6 +202,44 @@ export function containGeometryInsideShell(
   return { adjustedCount, maxOriginalSignedDist };
 }
 
+
+export function containGeometryInsideShell(
+  geometry: THREE.BufferGeometry,
+  envelope: ShellEnvelope,
+  margin = 0.01,
+  matrixWorld?: THREE.Matrix4
+): ContainmentResult {
+  const batches = containmentBatches(geometry,envelope,margin,matrixWorld);
+  let step = batches.next();
+  while (!step.done) step = batches.next();
+  return step.value;
+}
+
+/** Preserve exactly the same containment, yielding the main thread in small time slices. */
+export async function containGeometryInsideShellAsync(
+  geometry: THREE.BufferGeometry,
+  envelope: ShellEnvelope,
+  margin = 0.01,
+  matrixWorld?: THREE.Matrix4,
+  shouldStop = () => false
+): Promise<ContainmentResult> {
+  if (shouldStop()) return { adjustedCount: 0, maxOriginalSignedDist: -Infinity };
+  const batches = containmentBatches(geometry,envelope,margin,matrixWorld);
+  let deadline = performance.now()+4;
+  let step = batches.next();
+  while (!step.done) {
+    if (shouldStop()) return { adjustedCount: 0, maxOriginalSignedDist: -Infinity };
+    if (performance.now() >= deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve,0));
+      if (shouldStop()) return { adjustedCount: 0, maxOriginalSignedDist: -Infinity };
+      deadline = performance.now()+4;
+    }
+    step = batches.next();
+  }
+  return step.value;
+}
+
+
 /**
  * Convenience helper to clamp every Mesh inside a THREE.Group (e.g. aligned arm/clavicle bones).
  */
@@ -223,4 +262,23 @@ export function containGroupInsideShell(
     }
   });
   return totalAdjusted;
+}
+
+/** Yield between aligned bone meshes as well as between their vertex batches. */
+export async function containGroupInsideShellAsync(
+  group: THREE.Object3D,
+  envelope: ShellEnvelope,
+  margin = 0.008,
+  shouldStop = () => false
+): Promise<number> {
+  group.updateMatrixWorld(true);
+  const meshes: THREE.Mesh[] = [];
+  group.traverse((obj) => { if (obj instanceof THREE.Mesh && obj.geometry) meshes.push(obj); });
+  let adjusted = 0;
+  for (const mesh of meshes) {
+    if (shouldStop()) break;
+    const result = await containGeometryInsideShellAsync(mesh.geometry,envelope,margin,mesh.matrixWorld,shouldStop);
+    adjusted += result.adjustedCount;
+  }
+  return adjusted;
 }
