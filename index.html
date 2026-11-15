@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ARES-MED OS — Defense Presentation | Team Sentinels</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="styles.css" />
+  <script defer src="dist/bundle.js"></script>
+</head>
+<body class="deck-body" data-active-slide="0">
+  <!-- Subtle Starfield Void -->
+  <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true"></canvas>
+
+  <!-- Live 3D Human BioTwin Stage (Rendered cleanly on Slide 4) -->
+  <div id="biotwin-global-stage" class="biotwin-global-stage" aria-hidden="true">
+    <div id="biotwin-canvas-host" class="biotwin-canvas-host"></div>
+  </div>
+
+  <!-- Minimal Single-Organ Pointer for Slide 4 -->
+  <svg id="organ-leader-svg" class="organ-leader-svg" aria-hidden="true">
+    <path id="organ-leader-path" class="organ-leader-path" d="" />
+    <circle id="organ-leader-dot" class="organ-leader-dot" cx="0" cy="0" r="3.5" />
+  </svg>
+  <div id="organ-callout" class="organ-callout" aria-hidden="true">
+    <span class="callout-pip"></span>
+    <span id="organ-callout-text">ALL 6 SYSTEMS · NOMINAL</span>
+  </div>
+
+  <!-- Minimal SpaceX Top Navigation Bar -->
+  <header class="top-hud" role="banner">
+    <div class="hud-brand">
+      <span class="hud-title">ARES-MED OS</span>
+      <span class="hud-sep">/</span>
+      <span class="hud-team">TEAM SENTINELS</span>
+    </div>
+
+    <div class="hud-controls">
+      <button
+        id="timer-btn"
+        class="pill-btn timer-pill"
+        type="button"
+        title="Start or pause 02:40 defense timer (T to toggle, Shift+T to reset)"
+      >
+        <span class="timer-dot" aria-hidden="true"></span>
+        <span id="timer-display">02:40</span>
+      </button>
+      <button
+        id="notes-toggle"
+        class="pill-btn"
+        type="button"
+        aria-pressed="false"
+        title="Show or hide speaker script notes (N)"
+      >
+        NOTES
+      </button>
+      <button
+        id="print-btn"
+        class="pill-btn"
+        type="button"
+        title="Export slides to PDF (P)"
+      >
+        PDF
+      </button>
+    </div>
+  </header>
+
+  <main id="deck-stage" class="deck-stage" aria-live="polite">
+    <!-- SLIDE 1: MISSION & TEAM -->
+    <section class="slide is-active" data-slide="0" aria-label="Slide 1: Mission Title">
+      <div class="hero-split">
+        <div class="editorial-col">
+          <p class="eyebrow">NASA SPACE APPS 2026</p>
+          <h1 class="display-xl">ARES-MED OS</h1>
+          <p class="lead-copy">
+            Offline digital-twin health software for astronauts on deep-space missions.
+          </p>
+
+          <div class="challenge-line">
+            <span class="meta-label">CHALLENGE</span>
+            <p class="meta-value">Create Health Monitoring Software for Astronauts on Space Missions</p>
+          </div>
+
+          <div class="team-dock" aria-label="Team Sentinels members">
+            <span class="meta-label">TEAM SENTINELS</span>
+            <div class="team-row">
+              <div class="member-chip">
+                <img src="assets/avatars/almaz-rashid.jpg" alt="Almaz Rashid" />
+                <span>Almaz Rashid</span>
+              </div>
+              <div class="member-chip">
+                <img src="assets/avatars/alexei-karpov.jpg" alt="Alexei Karpov" />
+                <span>Alexei Karpov</span>
+              </div>
+              <div class="member-chip">
+                <img src="assets/avatars/akzhol-bahtiar.jpg" alt="Akzhol Bahtiar" />
+                <span>Akzhol Bahtiar</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-emblem-col" aria-hidden="true">
+          <div id="ares-hero-logo" class="ares-hero-logo"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SLIDE 2: THE PROBLEM & GOAL -->
+    <section class="slide slide-backdrop" data-slide="1" aria-label="Slide 2: Problem and Mission Goal">
+      <img
+        class="bg-photo"
+        src="assets/nasa/nasa-sunset-limb.jpg"
+        alt="NASA ISS Cupola overlooking Earth's illuminated horizon in deep space darkness"
+      />
+      <div class="bg-scrim"></div>
+
+      <div class="editorial-overlay">
+        <p class="eyebrow">02 // WHY IT MATTERS</p>
+        <h2 class="display-lg">NO REAL-TIME<br />EARTH BACKUP</h2>
+        <p class="lead-copy">
+          At Mars distance, radio signals take up to 14m 20s each way. In an emergency, crews cannot wait half an hour for Earth doctors.
+        </p>
+
+        <div class="kpi-strip">
+          <div class="kpi-block">
+            <span class="kpi-value">14m 20s</span>
+            <span class="kpi-caption">One-way signal delay to Mars</span>
+          </div>
+          <div class="kpi-block">
+            <span class="kpi-value">0 ms</span>
+            <span class="kpi-caption">Local onboard triage wait time</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SLIDE 3: STEP 1 - PRE-FLIGHT CALIBRATION -->
+    <section class="slide" data-slide="2" aria-label="Slide 3: Step 1 Pre-Flight Twin Calibration">
+      <div class="media-split">
+        <div class="editorial-col compact">
+          <p class="eyebrow">03 // STEP 1 · BEFORE LAUNCH</p>
+          <h2 class="display-lg">PERSONAL<br />PRE-FLIGHT TWIN</h2>
+          <p class="lead-copy">
+            Zero gravity breaks normal Earth lab ranges. Before launch, each astronaut calibrates a personal twin in the Pre-Flight Lab.
+          </p>
+
+          <ol class="step-list">
+            <li>
+              <span class="step-num">01</span>
+              <div>
+                <strong>Blood &amp; Renal Labs</strong>
+                <span>Personal mineral and kidney baselines</span>
+              </div>
+            </li>
+            <li>
+              <span class="step-num">02</span>
+              <div>
+                <strong>Genetic Sensitivity</strong>
+                <span>Flags drug and vision pressure risks early</span>
+              </div>
+            </li>
+            <li>
+              <span class="step-num">03</span>
+              <div>
+                <strong>6-Organ Tuning</strong>
+                <span>Adjusts alert thresholds per crew member</span>
+              </div>
+            </li>
+          </ol>
+        </div>
+
+        <div class="shot-col">
+          <figure class="screen-frame">
+            <img
+              src="assets/screenshots/shot-preflight.png"
+              alt="ARES-MED Pre-Flight Calibration interface showing astronaut lab markers and 6-organ sensitivity matrix"
+            />
+            <figcaption class="screen-caption">LIVE APP // PRE-FLIGHT TWIN LAB (/preflight)</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- SLIDE 4: STEP 2 - LIVE 3D BIOTWIN -->
+    <section class="slide" data-slide="3" aria-label="Slide 4: Step 2 Live 3D BioTwin">
+      <div class="biotwin-ui-col">
+        <p class="eyebrow">04 // STEP 2 · IN FLIGHT</p>
+        <h2 class="display-lg">SIX CONNECTED<br />BODY SYSTEMS</h2>
+        <p class="lead-copy">
+          Space hazards trigger chain reactions across organs. Pick a flight state to watch how stress propagates live.
+        </p>
+
+        <div id="biotwin-preset-group" class="pill-group" role="group" aria-label="BioTwin scenarios"></div>
+
+        <div class="reaction-note">
+          <strong id="biotwin-headline">ALL 6 BODY SYSTEMS BALANCED</strong>
+          <p id="biotwin-plain-copy">Oxygen, blood pressure, hydration, and radiation stay inside healthy spaceflight baselines.</p>
+        </div>
+
+        <div class="view-links" role="group" aria-label="Anatomy render layer">
+          <button type="button" class="text-tab is-active" data-visual-mode="atlas">Atlas</button>
+          <button type="button" class="text-tab" data-visual-mode="xray">X-Ray</button>
+          <button type="button" class="text-tab" data-visual-mode="vascular">Vascular</button>
+        </div>
+      </div>
+
+      <figure class="screen-frame print-only-biotwin">
+        <img
+          src="assets/screenshots/shot-orbital-03.png"
+          alt="ARES-MED 3D Human BioTwin showing Neuro-Ocular fluid shift response"
+        />
+        <figcaption class="screen-caption">LIVE 3D BIOTWIN // 6 BODY SYSTEMS</figcaption>
+      </figure>
+    </section>
+
+    <!-- SLIDE 5: STEP 3 - AUTONOMOUS CMO CONSOLE -->
+    <section class="slide" data-slide="4" aria-label="Slide 5: Step 3 Autonomous CMO Console">
+      <div class="media-split console-split">
+        <div class="editorial-col compact">
+          <p class="eyebrow">05 // STEP 3 · CMO CONSOLE</p>
+          <h2 class="display-lg">AUTONOMOUS<br />CARE IN ACTION</h2>
+          <p class="lead-copy">
+            When an alert hits, the console guides crew from detection to full recovery in three plain steps.
+          </p>
+
+          <div id="console-step-list" class="interactive-steps" role="tablist" aria-label="Console workflow steps"></div>
+        </div>
+
+        <div class="shot-col console-stage-col">
+          <figure class="screen-frame hero-console-frame">
+            <img
+              id="console-hero-img"
+              src="assets/screenshots/shot-console-triage.png"
+              alt="ARES-MED CMO Console showing critical Neuro-Ocular alert on 3D BioTwin"
+            />
+            <figcaption id="console-hero-caption" class="screen-caption">STEP 01 // AUTONOMOUS TRIAGE ALERT</figcaption>
+          </figure>
+
+          <div id="console-filmstrip" class="filmstrip" aria-label="Console step snapshots"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SLIDE 6: OPEN NASA & SPACE AGENCY DATA -->
+    <section class="slide slide-backdrop" data-slide="5" aria-label="Slide 6: Built on Open NASA Science">
+      <img
+        class="bg-photo bg-photo-subtle"
+        src="assets/nasa/nasa-earth-horizon.jpg"
+        alt="NASA ISS photograph of glowing blue Earth horizon against obsidian deep space"
+      />
+      <div class="bg-scrim scrim-strong"></div>
+
+      <div class="media-split nasa-split">
+        <div class="editorial-col compact">
+          <p class="eyebrow">06 // OPEN DATA &amp; TECH</p>
+          <h2 class="display-lg">GROUNDED IN<br />NASA SCIENCE</h2>
+          <p class="lead-copy">
+            Every alert and threshold runs 100% offline inside the browser using open space-agency research.
+          </p>
+
+          <ul class="source-list">
+            <li>
+              <strong>NASA HRP &amp; OSDR</strong>
+              <span>Spaceflight medical risks &amp; astronaut physiology datasets</span>
+            </li>
+            <li>
+              <strong>NASA DONKI</strong>
+              <span>Solar flare &amp; deep-space radiation event alerts</span>
+            </li>
+            <li>
+              <strong>CSA Physiology</strong>
+              <span>Wearable biometric streams &amp; radiation tolerances</span>
+            </li>
+            <li>
+              <strong>NIH HuBMAP</strong>
+              <span>Interactive 3D human organ geometry</span>
+            </li>
+          </ul>
+        </div>
+
+        <div class="shot-col">
+          <figure class="screen-frame">
+            <img
+              src="assets/screenshots/shot-orbital-03.png"
+              alt="ARES-MED 3D Orbital Briefing displaying Neuro-Ocular fluid shift warning"
+            />
+            <figcaption class="screen-caption">LIVE APP // ORBITAL BRIEFING (/)</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- SLIDE 7: VERIFICATION & LIVE LAUNCH -->
+    <section class="slide slide-closing" data-slide="6" aria-label="Slide 7: Flight Verified and Ready">
+      <div class="closing-wrap">
+        <p class="eyebrow">07 // VERIFIED &amp; READY</p>
+        <h2 class="display-xl">BUILT FOR<br />MARS TRANSIT</h2>
+        <p class="lead-copy closing-lead">
+          Three connected screens working seamlessly offline—tested end-to-end before launch.
+        </p>
+
+        <div class="kpi-strip closing-kpis">
+          <div class="kpi-block">
+            <span class="kpi-value">106 / 106</span>
+            <span class="kpi-caption">Automated checks passing across 23 suites</span>
+          </div>
+          <div class="kpi-block">
+            <span class="kpi-value">100%</span>
+            <span class="kpi-caption">Offline autonomous medical guidance</span>
+          </div>
+          <div class="kpi-block">
+            <span class="kpi-value">3 VIEWS</span>
+            <span class="kpi-caption">Pre-Flight Lab · 3D Twin · CMO Console</span>
+          </div>
+        </div>
+
+        <div class="closing-actions">
+          <a
+            href="http://localhost:3000/?mode=console"
+            target="_blank"
+            rel="noopener"
+            class="pill-cta"
+          >
+            OPEN LIVE APPLICATION ↗
+          </a>
+        </div>
+
+        <footer class="closing-footer">
+          <span>TEAM SENTINELS · ALMAZ RASHID · ALEXEI KARPOV · AKZHOL BAHTIAR</span>
+          <span>NASA SPACE APPS 2026</span>
+        </footer>
+      </div>
+    </section>
+  </main>
+
+  <!-- Toggleable Speaker Script Bar (Press N) -->
+  <aside id="presenter-bar" class="presenter-bar" hidden aria-label="Speaker script cue">
+    <div class="presenter-meta">
+      <span id="cue-time" class="cue-time">0:00 – 0:16</span>
+      <span id="cue-label" class="cue-label">ARES-MED OS</span>
+    </div>
+    <p id="cue-text" class="cue-text"></p>
+  </aside>
+
+  <!-- Minimal Bottom Rail -->
+  <nav class="bottom-nav" aria-label="Slide navigation">
+    <button id="prev-btn" class="nav-arrow" type="button">PREV</button>
+    <div id="progress-dots" class="progress-dots" role="tablist" aria-label="Slide selector"></div>
+    <div class="nav-right">
+      <span id="slide-counter" class="slide-counter">01<span> / 07</span></span>
+      <button id="next-btn" class="nav-arrow" type="button">NEXT</button>
+    </div>
+  </nav>
+</body>
+</html>
