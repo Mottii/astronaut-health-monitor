@@ -1851,6 +1851,7 @@ export function BioTwin3DStage({
     // Smooth animation loop
     const clock = new THREE.Clock();
     let introTime = 0;
+    let logoManualTurn = 0;
     const projectedVec = new THREE.Vector3();
     const targetColor = new THREE.Color();
     const statusColorObj = new THREE.Color();
@@ -2272,7 +2273,8 @@ export function BioTwin3DStage({
       }
 
       if (story && cosmicLogo) {
-        cosmicLogo.update(story.current, clock.elapsedTime, camera, anatomyRoot.quaternion, reducedMotionRef.current, introTime);
+        logoManualTurn = THREE.MathUtils.damp(logoManualTurn, modelRotationRef.current?.current ?? 0, 3.8, dt);
+        cosmicLogo.update(story.current, clock.elapsedTime, camera, anatomyRoot.quaternion, reducedMotionRef.current, introTime, logoManualTurn);
       }
       if (story && chapterAtmosphere) {
         chapterAtmosphere.update(story.current, t, camera, storyTarget, reducedMotionRef.current);

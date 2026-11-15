@@ -167,6 +167,7 @@ export function PresentationStory({
   };
 
   const beginRotation = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!event.isPrimary || event.button !== 0) return;
     if ((event.target as HTMLElement).closest("button, a, .ares-story-copy, .ares-title-brief")) return;
     dragRef.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY, angle: modelRotationRef.current, active: false };
   };
@@ -186,6 +187,7 @@ export function PresentationStory({
     }
   };
   const endRotation = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointer !== event.pointerId) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     dragRef.current = null;
     rootRef.current?.removeAttribute("data-dragging");
@@ -276,7 +278,7 @@ export function PresentationStory({
       </header>
 
       <div ref={scrollRef} className="ares-story-scroll" tabIndex={0}
-        aria-label="Mission briefing. Scroll to explore; drag horizontally to rotate the body. Bracket keys also rotate."
+        aria-label="Mission briefing. Scroll to explore; drag horizontally to rotate the logo or body. Bracket keys also rotate."
         onScroll={handleStoryScroll} onPointerDown={beginRotation} onPointerMove={rotateModel}
         onPointerUp={endRotation} onPointerCancel={endRotation}>
         {STORY_PAGES.map(({ slide, index, page, clone }) => {
@@ -331,7 +333,7 @@ export function PresentationStory({
         <div className="ares-story-settings">
           <button type="button" className="ares-motion-setting" aria-pressed={reducedMotion} onClick={() => setReducedMotion((value) => !value)}>{reducedMotion ? "FULL MOTION" : "REDUCE MOTION"}</button>
         </div>
-        <div className="ares-story-scroll-cue" aria-hidden="true"><span>{slideIndex === STORY_CHAPTER_COUNT - 1 ? "KEEP SCROLLING · BACK TO THE BEGINNING" : slideIndex === 0 ? "SCROLL TO EXPLORE THE MISSION" : "SCROLL TO EXPLORE · DRAG TO ROTATE"}</span><ArrowDown size={13} /></div>
+        <div className="ares-story-scroll-cue" aria-hidden="true"><span>{slideIndex === STORY_CHAPTER_COUNT - 1 ? "KEEP SCROLLING · BACK TO THE BEGINNING" : slideIndex === 0 ? "SCROLL TO EXPLORE · DRAG TO ROTATE LOGO" : "SCROLL TO EXPLORE · DRAG TO ROTATE"}</span><ArrowDown size={13} /></div>
         <span className="ares-story-counter">{String(slideIndex + 1).padStart(2, "0")}<span> / 07</span></span>
       </footer>
     </div>

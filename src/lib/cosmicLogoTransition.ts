@@ -156,16 +156,16 @@ export function createCosmicLogoTransition(particleCount: number, pixelRatio: nu
       targets.needsUpdate = true;
       bodyReady = true;
     },
-    update(progress: number, elapsed: number, camera: THREE.Camera, rotation: THREE.Quaternion, reducedMotion: boolean, introElapsed = elapsed) {
+    update(progress: number, elapsed: number, camera: THREE.Camera, rotation: THREE.Quaternion, reducedMotion: boolean, introElapsed = elapsed, manualTurn = 0) {
       const state = sampleLogoMorph(progress, introElapsed, reducedMotion);
       group.visible = state.mist > 0.001 || state.particles > 0.001;
       if (!group.visible) return;
-      // The emblem has one constant spin; only the particle destination follows the body.
+      // Visitor rotation offsets the constant spin; only the particle destination follows the body.
       group.quaternion.identity();
       const time = reducedMotion ? 0 : elapsed;
       emblem.position.set(0, 0.16 + state.drop, 0);
       emblem.scale.setScalar(0.64);
-      emblem.rotation.set(-0.07, -0.2 + time * 0.38, 0.025);
+      emblem.rotation.set(-0.07, -0.2 + time * 0.38 + manualTurn, 0.025);
       emblem.updateMatrix();
       surfaceMaterial.uniforms.uTime.value = time;
       surfaceMaterial.uniforms.uIntro.value = state.intro;

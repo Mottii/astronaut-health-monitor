@@ -21,6 +21,17 @@ describe("cosmic logo to BioTwin transition", () => {
       previousAngle = emblem.rotation.y;
       previousTime = time;
     }
+    // Dragging turns both the shell and its particles, including after a full scroll loop.
+    const bodyRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),0.5);
+    transition.update(0,6,camera,bodyRotation,false,6,0.8);
+    expect(emblem.rotation.y-previousAngle).toBeCloseTo(0.8,10);
+    expect(particles.material.uniforms.uLogoMatrix.value.elements).toEqual(emblem.matrix.elements);
+    const draggedAngle = emblem.rotation.y;
+    transition.update(7,7,camera,bodyRotation,false,7,0.8);
+    expect(emblem.rotation.y-draggedAngle).toBeCloseTo(0.38,10);
+    expect(particles.material.uniforms.uBodyMatrix.value.elements).toEqual(new THREE.Matrix4().makeRotationFromQuaternion(bodyRotation).elements);
+    transition.update(7,7,camera,bodyRotation,true,7,0.8);
+    expect(emblem.rotation.y).toBeCloseTo(-0.2+0.8,10);
     transition.group.traverse((child) => {
       if (child instanceof THREE.Mesh || child instanceof THREE.Points || child instanceof THREE.LineSegments) {
         child.geometry.dispose();
