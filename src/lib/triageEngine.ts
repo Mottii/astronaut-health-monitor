@@ -968,13 +968,34 @@ export function formatFlightSurgeonPacket(
 
   if (clinicalContext.crewProfile) {
     const mults = computeOrganSensitivityMultipliers(clinicalContext.crewProfile);
+    const prov = clinicalContext.crewProfile.provenance;
+    const suppliedCount = prov ? prov.suppliedFields.length : 15;
+    const defaultedList = prov?.defaultedFields ?? [];
+    const provLine = `- Data Provenance: ${suppliedCount}/15 fields measured (${prov?.sourceType ?? "builtin"})${
+      defaultedList.length > 0
+        ? ` | Defaulted to baseline: ${defaultedList.join(", ")}`
+        : ""
+    }`;
+    const consultStatus = clinicalContext.consultation
+      ? `${clinicalContext.consultation.engineUsed} (${clinicalContext.consultation.source.toUpperCase()})`
+      : "Not executed (deterministic triage active)";
     extraLines.push(
       ``,
       `[ASTRONAUT BIOLOGICAL PROFILE & INFERENCE ENGINE]`,
       `- Crew Persona: ${clinicalContext.crewProfile.name} (${clinicalContext.crewProfile.callsign}) — ${clinicalContext.crewProfile.summaryTag}`,
+      provLine,
       `- Pharmacogenomics: MTRR=${clinicalContext.crewProfile.pharmacogenomics.mtrrGenotype}, CYP2D6=${clinicalContext.crewProfile.pharmacogenomics.cyp2d6Phenotype}, CYP2C9=${clinicalContext.crewProfile.pharmacogenomics.cyp2c9Phenotype}, ATM=${clinicalContext.crewProfile.pharmacogenomics.atmDnaRepairScore}`,
-      `- Multipliers: Neuro=${mults.neuro_ocular}x, Renal=${mults.musculoskeletal_renal}x, Immune=${mults.immune_hematology}x | Engine=${clinicalContext.inferenceMode ?? "local_mechanistic"}`
+      `- Multipliers: Neuro=${mults.neuro_ocular}x, Renal=${mults.musculoskeletal_renal}x, Immune=${mults.immune_hematology}x | Engine=${clinicalContext.inferenceMode ?? "local_mechanistic"} | Synthesis=${consultStatus}`
     );
+    if (clinicalContext.consultation) {
+      extraLines.push(``, `[BIOTWIN AI CONSULTATION SYNTHESIS]`);
+      if (clinicalContext.consultation.guardrailConflict) {
+        extraLines.push(
+          `- [GUARDRAIL CONFLICT WARNING] ${clinicalContext.consultation.conflictReason ?? "Advisory model output conflicted with deterministic contraindication."}`
+        );
+      }
+      extraLines.push(clinicalContext.consultation.summaryText);
+    }
   }
 
   if (clinicalContext.subStructure) {

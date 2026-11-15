@@ -311,6 +311,47 @@ describe("triageEngine", () => {
     expect(packet).toContain("Engage LBNP Chibis / Venous Thigh Cuffs");
   });
 
+  it("includes crew profile provenance and live AI consultation synthesis in formatFlightSurgeonPacket", () => {
+    const chen = DEFAULT_CREW_PROFILES.find((p) => p.id === "ares_2_chen")!;
+    const partialChen = {
+      ...chen,
+      provenance: {
+        sourceType: "text_upload" as const,
+        suppliedFields: ["urinaryCalciumMgDay", "urinaryCitrateMgDay"],
+        defaultedFields: ["serumCtxPgMl"],
+      },
+    };
+    const sans = getScenario("sans_co2_fluid_shift");
+    const evalResult = evaluateCrewHealth(
+      sans.vitals,
+      sans.envTelemetry,
+      "mars_transit",
+      partialChen
+    );
+    const packet = formatFlightSurgeonPacket(
+      evalResult,
+      sans.vitals,
+      sans.envTelemetry,
+      "mars_transit",
+      {
+        crewProfile: partialChen,
+        inferenceMode: "local_ollama_llm",
+        consultation: {
+          engineUsed: "LOCAL LLM (llama3.2)",
+          source: "llm",
+          summaryText: "- Avoid Acetazolamide; prioritize LBNP + Potassium Citrate.",
+          guardrailConflict: true,
+          conflictReason: "Simulated conflict check",
+        },
+      }
+    );
+    expect(packet).toContain("Data Provenance: 2/15 fields measured (text_upload)");
+    expect(packet).toContain("Defaulted to baseline: serumCtxPgMl");
+    expect(packet).toContain("[BIOTWIN AI CONSULTATION SYNTHESIS]");
+    expect(packet).toContain("[GUARDRAIL CONFLICT WARNING] Simulated conflict check");
+    expect(packet).toContain("Avoid Acetazolamide; prioritize LBNP + Potassium Citrate.");
+  });
+
   it("keeps drug_acetazolamide_renal cascade stateful behind activeDrugIds and models efficacy/prophylaxis", () => {
     const vance = DEFAULT_CREW_PROFILES.find((p) => p.id === "ares_1_vance")!;
     const chen = DEFAULT_CREW_PROFILES.find((p) => p.id === "ares_2_chen")!;

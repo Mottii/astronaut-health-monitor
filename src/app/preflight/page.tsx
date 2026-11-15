@@ -29,8 +29,16 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { BODY_SYSTEM_METADATA, MISSION_ENVIRONMENTS } from "@/data/nasaHrpData";
-import { ALL_BIOLOGICAL_FIELDS, RENAL_STONE } from "@/lib/clinicalThresholds";
+import {
+  BODY_SYSTEM_METADATA,
+  DEFAULT_CREW_PROFILES,
+  MISSION_ENVIRONMENTS,
+} from "@/data/nasaHrpData";
+import {
+  ALL_BIOLOGICAL_FIELDS,
+  RENAL_STONE,
+  type BiologicalFieldKey,
+} from "@/lib/clinicalThresholds";
 import {
   CREW_PROFILE_STORAGE_KEY,
   createDefaultCrewProfilesState,
@@ -43,7 +51,9 @@ import { evaluateCrewHealth } from "@/lib/triageEngine";
 import {
   computeOrganSensitivityMultipliers,
   generateTwinConsultationSummary,
+  probeLocalEndpoint,
   runPreFlightQualificationSuite,
+  type LocalEndpointProbeResult,
   type TwinConsultationResult,
 } from "@/lib/twinEngine";
 import type {
@@ -95,6 +105,10 @@ export default function PreFlightAdminPage() {
     null
   );
   const [isConsulting, setIsConsulting] = useState(false);
+  const [probeResult, setProbeResult] = useState<LocalEndpointProbeResult | null>(
+    null
+  );
+  const [isProbing, setIsProbing] = useState(false);
   const [copiedCurl, setCopiedCurl] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -181,7 +195,8 @@ export default function PreFlightAdminPage() {
   );
 
   function updateActiveProfile(
-    updater: (prev: AstronautBiologicalProfile) => AstronautBiologicalProfile
+    updater: (prev: AstronautBiologicalProfile) => AstronautBiologicalProfile,
+    editedBiologicalField?: BiologicalFieldKey
   ) {
     setConsultation(null);
     commitStore((prev) => {
@@ -193,13 +208,38 @@ export default function PreFlightAdminPage() {
         profiles: prev.profiles.map((p) => {
           if (p.id !== targetId) return p;
           const updated = updater(p);
+          if (!editedBiologicalField) {
+            return updated;
+          }
+          const prevSupplied = p.provenance?.suppliedFields ?? [
+            ...ALL_BIOLOGICAL_FIELDS,
+          ];
+          const prevDefaulted = p.provenance?.defaultedFields ?? [];
+          const nextSupplied = prevSupplied.includes(editedBiologicalField)
+            ? prevSupplied
+            : [...prevSupplied, editedBiologicalField];
+          const nextDefaulted = prevDefaulted.filter(
+            (f) => f !== editedBiologicalField
+          );
+          const nextConverted = (p.provenance?.convertedFields ?? []).filter(
+            (c) => c.field !== editedBiologicalField
+          );
+          const nextRejected = (p.provenance?.rejectedFields ?? []).filter(
+            (r) => r.field !== editedBiologicalField
+          );
           return {
             ...updated,
             provenance: {
               sourceType: "manual_override",
               fileName: p.provenance?.fileName,
-              suppliedFields: [...ALL_BIOLOGICAL_FIELDS],
-              defaultedFields: [],
+              suppliedFields: nextSupplied,
+              defaultedFields: nextDefaulted,
+              ...(nextConverted.length > 0
+                ? { convertedFields: nextConverted }
+                : {}),
+              ...(nextRejected.length > 0
+                ? { rejectedFields: nextRejected }
+                : {}),
             },
           };
         }),
@@ -244,10 +284,29 @@ export default function PreFlightAdminPage() {
       const suppliedCount =
         parsed.provenance?.suppliedFields.length ?? totalFields;
       const defaulted = parsed.provenance?.defaultedFields ?? [];
-      const manyDefaulted = defaulted.length > totalFields / 2;
+      const converted = parsed.provenance?.convertedFields ?? [];
+      const rejected = parsed.provenance?.rejectedFields ?? [];
+      const manyDefaulted =
+        defaulted.length > totalFields / 2 || rejected.length > 0;
+      const notes: string[] = [];
+      if (converted.length > 0) {
+        notes.push(
+          `Unit-converted ${converted.length} field(s): ${converted.map((c) => `${c.field} (${c.rawValue} ${c.rawUnit} -> ${c.convertedValue} ${c.targetUnit})`).join(", ")}`
+        );
+      }
+      if (rejected.length > 0) {
+        notes.push(
+          `Rejected ${rejected.length} out-of-bounds field(s): ${rejected.map((r) => `${r.field} (${r.rawValue})`).join(", ")}`
+        );
+      }
+      if (defaulted.length > 0) {
+        notes.push(
+          `${defaulted.length} defaulted to reference baseline: ${defaulted.join(", ")}`
+        );
+      }
       const detail =
-        defaulted.length > 0
-          ? `Extracted ${suppliedCount}/${totalFields} fields; ${defaulted.length} defaulted to reference baseline: ${defaulted.join(", ")}.`
+        notes.length > 0
+          ? `Extracted ${suppliedCount}/${totalFields} fields. ${notes.join(". ")}.`
           : `Extracted ${suppliedCount}/${totalFields} fields cleanly for ${parsed.name} (${parsed.callsign}).`;
       setUploadNotice({
         kind: manyDefaulted ? "warn" : "ok",
@@ -294,10 +353,13 @@ export default function PreFlightAdminPage() {
   function handleResetDefaults() {
     setConsultation(null);
     setLastIngestedFile(null);
-    commitStore(() => createDefaultCrewProfilesState());
+    commitStore((prev) => ({
+      ...createDefaultCrewProfilesState(),
+      inferenceConfig: prev.inferenceConfig,
+    }));
     setUploadNotice({
       kind: "ok",
-      text: "Restored 3 NASA JSC pre-flight baselines.",
+      text: "Restored 3 NASA JSC pre-flight baselines (inference configuration preserved).",
     });
   }
 
@@ -315,8 +377,23 @@ export default function PreFlightAdminPage() {
     }
   }
 
+  async function handleTestLocalConnection() {
+    setIsProbing(true);
+    setProbeResult(null);
+    try {
+      const res = await probeLocalEndpoint(
+        store.inferenceConfig.localEndpointUrl,
+        store.inferenceConfig.localModelName
+      );
+      setProbeResult(res);
+    } finally {
+      setIsProbing(false);
+    }
+  }
+
   function handleModeChange(mode: TwinInferenceMode) {
     setConsultation(null);
+    setProbeResult(null);
     commitStore((prev) => ({
       ...prev,
       inferenceConfig: {
@@ -326,9 +403,43 @@ export default function PreFlightAdminPage() {
     }));
   }
 
+  const builtInMatch = DEFAULT_CREW_PROFILES.find(
+    (p) => p.id === activeProfile.id
+  );
+  const isUnmodifiedBuiltIn =
+    Boolean(builtInMatch) &&
+    (activeProfile.provenance?.sourceType === "builtin" ||
+      !activeProfile.provenance) &&
+    builtInMatch?.name === activeProfile.name &&
+    builtInMatch?.callsign === activeProfile.callsign &&
+    builtInMatch?.role === activeProfile.role &&
+    builtInMatch?.missionAssignment === activeProfile.missionAssignment;
+
+  const openApiCurlPayload = isUnmodifiedBuiltIn
+    ? JSON.stringify({
+        profileId: activeProfile.id,
+        envId: activeProfile.missionAssignment,
+        actionId: "neuro_acetazolamide_rx",
+      })
+    : JSON.stringify({
+        profile: {
+          id: activeProfile.id,
+          callsign: activeProfile.callsign,
+          name: activeProfile.name,
+          role: activeProfile.role,
+          missionAssignment: activeProfile.missionAssignment,
+          biochemical: activeProfile.biochemical,
+          pharmacogenomics: activeProfile.pharmacogenomics,
+          endurance: activeProfile.endurance,
+          provenance: activeProfile.provenance,
+        },
+        envId: activeProfile.missionAssignment,
+        actionId: "neuro_acetazolamide_rx",
+      });
+
   const openApiCurlSnippet = `curl -X POST http://localhost:3000/api/twin-simulate \\
   -H "Content-Type: application/json" \\
-  -d '{"profileId":"${activeProfile.id}","envId":"${activeProfile.missionAssignment}","actionId":"neuro_acetazolamide_rx"}'`;
+  -d '${openApiCurlPayload}'`;
 
   async function handleCopyCurl() {
     try {
@@ -346,6 +457,37 @@ export default function PreFlightAdminPage() {
       : store.inferenceConfig.mode === "local_ollama_llm"
       ? "Local LLM"
       : "Open API";
+
+  const getFieldProvenanceBadge = (fieldKey: BiologicalFieldKey) => {
+    const prov = activeProfile.provenance;
+    if (!prov) return null;
+    const conv = prov.convertedFields?.find((c) => c.field === fieldKey);
+    if (conv) {
+      return (
+        <span
+          title={`Converted from ${conv.rawValue} ${conv.rawUnit}`}
+          className="rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 font-mono text-[9.5px] text-sky-300"
+        >
+          CONVERTED
+        </span>
+      );
+    }
+    if (prov.defaultedFields.includes(fieldKey)) {
+      return (
+        <span
+          title="Defaulted to population reference baseline"
+          className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9.5px] text-amber-300"
+        >
+          DEFAULTED
+        </span>
+      );
+    }
+    return (
+      <span className="rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[9.5px] text-emerald-300">
+        MEASURED
+      </span>
+    );
+  };
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-[#141414] text-[#ececec] antialiased">
@@ -647,6 +789,27 @@ export default function PreFlightAdminPage() {
                           ? ` (${activeProfile.provenance.fileName})`
                           : ""}
                       </span>
+                      {activeProfile.provenance.convertedFields &&
+                        activeProfile.provenance.convertedFields.length > 0 && (
+                          <span className="font-mono text-[10.5px] text-sky-300">
+                            Converted:{" "}
+                            {activeProfile.provenance.convertedFields
+                              .map(
+                                (c) =>
+                                  `${c.field} (${c.rawValue} ${c.rawUnit} → ${c.convertedValue} ${c.targetUnit})`
+                              )
+                              .join(", ")}
+                          </span>
+                        )}
+                      {activeProfile.provenance.rejectedFields &&
+                        activeProfile.provenance.rejectedFields.length > 0 && (
+                          <span className="font-mono text-[10.5px] text-rose-300">
+                            Rejected (out of bounds):{" "}
+                            {activeProfile.provenance.rejectedFields
+                              .map((r) => `${r.field} (${r.rawValue})`)
+                              .join(", ")}
+                          </span>
+                        )}
                       {activeProfile.provenance.defaultedFields.length > 0 && (
                         <span className="font-mono text-[10.5px] text-amber-300">
                           Baseline-defaulted:{" "}
@@ -750,52 +913,63 @@ export default function PreFlightAdminPage() {
                       Biochemical Panel (NASA SMO 016E)
                     </h3>
                     <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2.5 text-xs sm:grid-cols-2">
-                      {[
+                      {(
                         [
-                          "24h Urinary Calcium",
-                          `${activeProfile.biochemical.urinaryCalciumMgDay} mg/day`,
-                          activeProfile.biochemical.urinaryCalciumMgDay >
-                            RENAL_STONE.caHigh,
-                        ],
-                        [
-                          "24h Urinary Citrate",
-                          `${activeProfile.biochemical.urinaryCitrateMgDay} mg/day`,
-                          activeProfile.biochemical.urinaryCitrateMgDay <
-                            RENAL_STONE.citrateLow,
-                        ],
-                        [
-                          "Serum CTX (Resorption)",
-                          `${activeProfile.biochemical.serumCtxPgMl} pg/mL`,
-                          activeProfile.biochemical.serumCtxPgMl >= 500,
-                        ],
-                        [
-                          "Baseline Lymphocytes (ALC)",
-                          `${activeProfile.biochemical.baselineLymphocyteCount} /uL`,
-                          activeProfile.biochemical.baselineLymphocyteCount <
-                            1600,
-                        ],
-                        [
-                          "Serum Ferritin",
-                          `${activeProfile.biochemical.serumFerritinNgMl} ng/mL`,
-                          activeProfile.biochemical.serumFerritinNgMl >= 170,
-                        ],
-                        [
-                          "Neurofilament Light (NfL)",
-                          `${activeProfile.biochemical.baselineNflPgMl} pg/mL`,
-                          activeProfile.biochemical.baselineNflPgMl >= 11,
-                        ],
-                      ].map(([label, val, warn]) => (
+                          [
+                            "urinaryCalciumMgDay",
+                            "24h Urinary Calcium",
+                            `${activeProfile.biochemical.urinaryCalciumMgDay} mg/day`,
+                            activeProfile.biochemical.urinaryCalciumMgDay >
+                              RENAL_STONE.caHigh,
+                          ],
+                          [
+                            "urinaryCitrateMgDay",
+                            "24h Urinary Citrate",
+                            `${activeProfile.biochemical.urinaryCitrateMgDay} mg/day`,
+                            activeProfile.biochemical.urinaryCitrateMgDay <
+                              RENAL_STONE.citrateLow,
+                          ],
+                          [
+                            "serumCtxPgMl",
+                            "Serum CTX (Resorption)",
+                            `${activeProfile.biochemical.serumCtxPgMl} pg/mL`,
+                            activeProfile.biochemical.serumCtxPgMl >= 500,
+                          ],
+                          [
+                            "baselineLymphocyteCount",
+                            "Baseline Lymphocytes (ALC)",
+                            `${activeProfile.biochemical.baselineLymphocyteCount} /uL`,
+                            activeProfile.biochemical.baselineLymphocyteCount <
+                              1600,
+                          ],
+                          [
+                            "serumFerritinNgMl",
+                            "Serum Ferritin",
+                            `${activeProfile.biochemical.serumFerritinNgMl} ng/mL`,
+                            activeProfile.biochemical.serumFerritinNgMl >= 170,
+                          ],
+                          [
+                            "baselineNflPgMl",
+                            "Neurofilament Light (NfL)",
+                            `${activeProfile.biochemical.baselineNflPgMl} pg/mL`,
+                            activeProfile.biochemical.baselineNflPgMl >= 11,
+                          ],
+                        ] as const
+                      ).map(([fieldKey, label, val, warn]) => (
                         <div
-                          key={label as string}
+                          key={fieldKey}
                           className="flex items-center justify-between border-b border-white/[0.04] pb-1.5"
                         >
                           <dt className="text-[#8e8e8e]">{label}</dt>
-                          <dd
-                            className={`font-mono font-medium ${
-                              warn ? "text-amber-300" : "text-[#ececec]"
-                            }`}
-                          >
-                            {val}
+                          <dd className="flex items-center gap-1.5">
+                            <span
+                              className={`font-mono font-medium ${
+                                warn ? "text-amber-300" : "text-[#ececec]"
+                              }`}
+                            >
+                              {val}
+                            </span>
+                            {getFieldProvenanceBadge(fieldKey)}
                           </dd>
                         </div>
                       ))}
@@ -810,55 +984,67 @@ export default function PreFlightAdminPage() {
                     <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2.5 text-xs sm:grid-cols-2">
                       <div className="flex items-center justify-between border-b border-white/[0.04] pb-1.5">
                         <dt className="text-[#8e8e8e]">MTRR A66G (SANS)</dt>
-                        <dd
-                          className={`font-mono font-medium ${
-                            activeProfile.pharmacogenomics.mtrrGenotype ===
-                            "GG_sans_risk"
-                              ? "text-amber-300"
-                              : "text-[#ececec]"
-                          }`}
-                        >
-                          {
-                            MTRR_LABELS[
-                              activeProfile.pharmacogenomics.mtrrGenotype
-                            ]
-                          }
+                        <dd className="flex items-center gap-1.5">
+                          <span
+                            className={`font-mono font-medium ${
+                              activeProfile.pharmacogenomics.mtrrGenotype ===
+                              "GG_sans_risk"
+                                ? "text-amber-300"
+                                : "text-[#ececec]"
+                            }`}
+                          >
+                            {
+                              MTRR_LABELS[
+                                activeProfile.pharmacogenomics.mtrrGenotype
+                              ]
+                            }
+                          </span>
+                          {getFieldProvenanceBadge("mtrrGenotype")}
                         </dd>
                       </div>
                       <div className="flex items-center justify-between border-b border-white/[0.04] pb-1.5">
                         <dt className="text-[#8e8e8e]">ATM DNA Repair</dt>
-                        <dd
-                          className={`font-mono font-medium ${
-                            activeProfile.pharmacogenomics.atmDnaRepairScore <
-                            0.8
-                              ? "text-rose-300"
-                              : "text-[#ececec]"
-                          }`}
-                        >
-                          {activeProfile.pharmacogenomics.atmDnaRepairScore.toFixed(
-                            2
-                          )}
-                          x
+                        <dd className="flex items-center gap-1.5">
+                          <span
+                            className={`font-mono font-medium ${
+                              activeProfile.pharmacogenomics.atmDnaRepairScore <
+                              0.8
+                                ? "text-rose-300"
+                                : "text-[#ececec]"
+                            }`}
+                          >
+                            {activeProfile.pharmacogenomics.atmDnaRepairScore.toFixed(
+                              2
+                            )}
+                            x
+                          </span>
+                          {getFieldProvenanceBadge("atmDnaRepairScore")}
                         </dd>
                       </div>
                       <div className="flex items-center justify-between border-b border-white/[0.04] pb-1.5">
                         <dt className="text-[#8e8e8e]">CYP2D6 Clearance</dt>
-                        <dd className="font-mono font-medium text-[#ececec]">
-                          {
-                            CYP_LABELS[
-                              activeProfile.pharmacogenomics.cyp2d6Phenotype
-                            ]
-                          }
+                        <dd className="flex items-center gap-1.5">
+                          <span className="font-mono font-medium text-[#ececec]">
+                            {
+                              CYP_LABELS[
+                                activeProfile.pharmacogenomics.cyp2d6Phenotype
+                              ]
+                            }
+                          </span>
+                          {getFieldProvenanceBadge("cyp2d6Phenotype")}
                         </dd>
                       </div>
                       <div className="flex items-center justify-between border-b border-white/[0.04] pb-1.5">
                         <dt className="text-[#8e8e8e]">CYP2C9 Clearance</dt>
-                        <dd className="font-mono font-medium text-[#ececec]">
-                          {
-                            CYP_LABELS[
-                              activeProfile.pharmacogenomics.cyp2c9Phenotype
-                            ]
-                          }
+                        <dd className="flex items-center gap-1.5">
+                          <span className="font-mono font-medium text-[#ececec]">
+                            {
+                              CYP_LABELS[
+                                activeProfile.pharmacogenomics.cyp2c9Phenotype
+                              ]
+                            }
+                          </span>
+                          {getFieldProvenanceBadge("cyp2c9Phenotype")}
                         </dd>
                       </div>
                     </dl>
@@ -872,28 +1058,53 @@ export default function PreFlightAdminPage() {
                     <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2.5 text-xs sm:grid-cols-2">
                       <div className="flex items-center justify-between border-b border-white/[0.04] pb-1.5">
                         <dt className="text-[#8e8e8e]">CO2 Reactivity Slope</dt>
-                        <dd className="font-mono font-medium text-[#ececec]">
-                          {activeProfile.endurance.co2ReactivitySlope.toFixed(2)}
-                          x
+                        <dd className="flex items-center gap-1.5">
+                          <span className="font-mono font-medium text-[#ececec]">
+                            {activeProfile.endurance.co2ReactivitySlope.toFixed(
+                              2
+                            )}
+                            x
+                          </span>
+                          {getFieldProvenanceBadge("co2ReactivitySlope")}
                         </dd>
                       </div>
                       <div className="flex items-center justify-between border-b border-white/[0.04] pb-1.5">
                         <dt className="text-[#8e8e8e]">Baseline ONSD</dt>
-                        <dd className="font-mono font-medium text-[#ececec]">
-                          {activeProfile.endurance.baselineOnsdMm.toFixed(1)} mm
+                        <dd className="flex items-center gap-1.5">
+                          <span className="font-mono font-medium text-[#ececec]">
+                            {activeProfile.endurance.baselineOnsdMm.toFixed(1)}{" "}
+                            mm
+                          </span>
+                          {getFieldProvenanceBadge("baselineOnsdMm")}
                         </dd>
                       </div>
                       <div className="flex items-center justify-between border-b border-white/[0.04] pb-1.5">
                         <dt className="text-[#8e8e8e]">DEXA Femoral T-Score</dt>
-                        <dd className="font-mono font-medium text-[#ececec]">
-                          {activeProfile.endurance.dexaBoneTScore.toFixed(1)} SD
+                        <dd className="flex items-center gap-1.5">
+                          <span className="font-mono font-medium text-[#ececec]">
+                            {activeProfile.endurance.dexaBoneTScore.toFixed(1)}{" "}
+                            SD
+                          </span>
+                          {getFieldProvenanceBadge("dexaBoneTScore")}
                         </dd>
                       </div>
                       <div className="flex items-center justify-between border-b border-white/[0.04] pb-1.5">
-                        <dt className="text-[#8e8e8e]">LBNP / SPE Threshold</dt>
-                        <dd className="font-mono font-medium text-[#ececec]">
-                          {activeProfile.endurance.lbnpEnduranceMin}m ·{" "}
-                          {activeProfile.endurance.radiationToleranceMsvDay} mSv/d
+                        <dt className="text-[#8e8e8e]">LBNP Endurance</dt>
+                        <dd className="flex items-center gap-1.5">
+                          <span className="font-mono font-medium text-[#ececec]">
+                            {activeProfile.endurance.lbnpEnduranceMin} min
+                          </span>
+                          {getFieldProvenanceBadge("lbnpEnduranceMin")}
+                        </dd>
+                      </div>
+                      <div className="flex items-center justify-between border-b border-white/[0.04] pb-1.5">
+                        <dt className="text-[#8e8e8e]">SPE Rad Tolerance</dt>
+                        <dd className="flex items-center gap-1.5">
+                          <span className="font-mono font-medium text-[#ececec]">
+                            {activeProfile.endurance.radiationToleranceMsvDay}{" "}
+                            mSv/d
+                          </span>
+                          {getFieldProvenanceBadge("radiationToleranceMsvDay")}
                         </dd>
                       </div>
                     </dl>
@@ -963,6 +1174,17 @@ export default function PreFlightAdminPage() {
                       </span>
                     </div>
 
+                    {consultation.guardrailConflict && (
+                      <div
+                        data-testid="guardrail-conflict-banner"
+                        className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200"
+                      >
+                        <strong>GUARDRAIL CONFLICT DETECTED:</strong>{" "}
+                        {consultation.conflictReason ??
+                          "Advisory LLM output contradicted an authoritative deterministic contraindication. Follow the Deterministic Clinical Guardrails below."}
+                      </div>
+                    )}
+
                     {consultation.source === "fallback" &&
                       consultation.fallbackReason && (
                         <div
@@ -985,7 +1207,11 @@ export default function PreFlightAdminPage() {
 
                     <div>
                       <p className="font-mono text-[10px] uppercase tracking-wider text-[#8e8e8e]">
-                        Advisory Model Synthesis
+                        {consultation.source === "llm"
+                          ? "Advisory LLM Synthesis"
+                          : consultation.source === "fallback"
+                          ? "Offline Fallback Synthesis"
+                          : "Deterministic Simulation Synthesis"}
                       </p>
                       <pre className="mt-1.5 whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-[#e5e5e5]">
                         {consultation.summaryText}
@@ -1122,7 +1348,8 @@ export default function PreFlightAdminPage() {
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() =>
+                          onClick={() => {
+                            setProbeResult(null);
                             commitStore((prev) => ({
                               ...prev,
                               inferenceConfig: {
@@ -1130,18 +1357,22 @@ export default function PreFlightAdminPage() {
                                 localEndpointUrl:
                                   "http://localhost:11434/v1/chat/completions",
                                 localModelName:
-                                  prev.inferenceConfig.localModelName ||
-                                  "llama3.1:8b",
+                                  !prev.inferenceConfig.localModelName ||
+                                  prev.inferenceConfig.localModelName ===
+                                    "local-model"
+                                    ? "llama3.2"
+                                    : prev.inferenceConfig.localModelName,
                               },
-                            }))
-                          }
+                            }));
+                          }}
                           className="cursor-pointer rounded-lg border border-white/[0.08] bg-[#121212] px-2.5 py-1 font-mono text-[11px] text-[#d4d4d4] hover:border-white/25 hover:text-white"
                         >
                           Ollama (:11434)
                         </button>
                         <button
                           type="button"
-                          onClick={() =>
+                          onClick={() => {
+                            setProbeResult(null);
                             commitStore((prev) => ({
                               ...prev,
                               inferenceConfig: {
@@ -1150,14 +1381,43 @@ export default function PreFlightAdminPage() {
                                   "http://localhost:1234/v1/chat/completions",
                                 localModelName: "local-model",
                               },
-                            }))
-                          }
+                            }));
+                          }}
                           className="cursor-pointer rounded-lg border border-white/[0.08] bg-[#121212] px-2.5 py-1 font-mono text-[11px] text-[#d4d4d4] hover:border-white/25 hover:text-white"
                         >
                           LM Studio (:1234)
                         </button>
+                        <button
+                          type="button"
+                          data-testid="test-local-llm-btn"
+                          onClick={handleTestLocalConnection}
+                          disabled={isProbing}
+                          className="cursor-pointer rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 font-mono text-[11px] text-emerald-300 hover:border-emerald-400/50 disabled:opacity-50"
+                        >
+                          {isProbing ? "Probing..." : "Test Connection"}
+                        </button>
                       </div>
                     </div>
+
+                    {probeResult && (
+                      <div
+                        data-testid="local-probe-status"
+                        className={`rounded-xl border px-3 py-2 text-xs ${
+                          probeResult.reachable
+                            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                            : "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                        }`}
+                      >
+                        {probeResult.reachable
+                          ? `Connected to local endpoint${
+                              probeResult.availableModels &&
+                              probeResult.availableModels.length > 0
+                                ? ` · Model "${store.inferenceConfig.localModelName}" verified (${probeResult.availableModels.join(", ")})`
+                                : ""
+                            }.`
+                          : probeResult.reason ?? "Local endpoint unreachable."}
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <label className="text-xs text-[#9b9b9b]">
@@ -1165,15 +1425,16 @@ export default function PreFlightAdminPage() {
                         <input
                           type="text"
                           value={store.inferenceConfig.localEndpointUrl}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            setProbeResult(null);
                             commitStore((prev) => ({
                               ...prev,
                               inferenceConfig: {
                                 ...prev.inferenceConfig,
                                 localEndpointUrl: e.target.value,
                               },
-                            }))
-                          }
+                            }));
+                          }}
                           className="mt-1.5 w-full rounded-xl border border-white/[0.08] bg-[#121212] px-3 py-2 font-mono text-xs text-[#ececec] focus:border-white/25 focus:outline-none"
                         />
                       </label>
@@ -1182,15 +1443,16 @@ export default function PreFlightAdminPage() {
                         <input
                           type="text"
                           value={store.inferenceConfig.localModelName}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            setProbeResult(null);
                             commitStore((prev) => ({
                               ...prev,
                               inferenceConfig: {
                                 ...prev.inferenceConfig,
                                 localModelName: e.target.value,
                               },
-                            }))
-                          }
+                            }));
+                          }}
                           className="mt-1.5 w-full rounded-xl border border-white/[0.08] bg-[#121212] px-3 py-2 font-mono text-xs text-[#ececec] focus:border-white/25 focus:outline-none"
                         />
                       </label>
@@ -1210,9 +1472,9 @@ export default function PreFlightAdminPage() {
 
                 {store.inferenceConfig.mode === "open_api" && (
                   <div className="space-y-3 rounded-2xl border border-white/[0.06] bg-[#1a1a1a] p-4">
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                       <label className="text-xs text-[#9b9b9b]">
-                        Simulation Endpoint URL
+                        Simulation / API Endpoint URL
                         <input
                           type="text"
                           value={store.inferenceConfig.openApiEndpointUrl}
@@ -1222,6 +1484,28 @@ export default function PreFlightAdminPage() {
                               inferenceConfig: {
                                 ...prev.inferenceConfig,
                                 openApiEndpointUrl: e.target.value,
+                              },
+                            }))
+                          }
+                          className="mt-1.5 w-full rounded-xl border border-white/[0.08] bg-[#121212] px-3 py-2 font-mono text-xs text-[#ececec] focus:border-white/25 focus:outline-none"
+                        />
+                      </label>
+                      <label className="text-xs text-[#9b9b9b]">
+                        Model Name (BYO OpenAI API)
+                        <input
+                          type="text"
+                          data-testid="open-api-model-input"
+                          placeholder="gpt-4o-mini"
+                          value={
+                            store.inferenceConfig.openApiModelName ??
+                            "gpt-4o-mini"
+                          }
+                          onChange={(e) =>
+                            commitStore((prev) => ({
+                              ...prev,
+                              inferenceConfig: {
+                                ...prev.inferenceConfig,
+                                openApiModelName: e.target.value,
                               },
                             }))
                           }
@@ -1318,7 +1602,7 @@ export default function PreFlightAdminPage() {
                 </div>
 
                 {/* Compact Identity Override */}
-                <div className="grid grid-cols-1 gap-3 rounded-2xl border border-white/[0.06] bg-[#1a1a1a] p-4 sm:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 rounded-2xl border border-white/[0.06] bg-[#1a1a1a] p-4 sm:grid-cols-4">
                   <label className="text-[11px] text-[#8e8e8e]">
                     Astronaut Name
                     <input
@@ -1348,6 +1632,20 @@ export default function PreFlightAdminPage() {
                     />
                   </label>
                   <label className="text-[11px] text-[#8e8e8e]">
+                    Role
+                    <input
+                      type="text"
+                      value={activeProfile.role}
+                      onChange={(e) =>
+                        updateActiveProfile((p) => ({
+                          ...p,
+                          role: e.target.value,
+                        }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-white/[0.08] bg-[#121212] px-2.5 py-1.5 text-xs text-[#ececec]"
+                    />
+                  </label>
+                  <label className="text-[11px] text-[#8e8e8e]">
                     Mission Profile
                     <select
                       value={activeProfile.missionAssignment}
@@ -1372,7 +1670,7 @@ export default function PreFlightAdminPage() {
                   </label>
                 </div>
 
-                {/* Compact Tabular Numeric Overrides (No bloated slider grid) */}
+                {/* Compact Tabular Numeric & Genomic Overrides (All 15 Biological Fields) */}
                 <div className="grid grid-cols-1 gap-4 rounded-2xl border border-white/[0.06] bg-[#1a1a1a] p-4 sm:grid-cols-2">
                   {(
                     [
@@ -1402,12 +1700,20 @@ export default function PreFlightAdminPage() {
                         step={step}
                         value={activeProfile.biochemical[key]}
                         onChange={(e) => {
+                          if (e.target.value.trim() === "") return;
                           const v = Number(e.target.value);
                           if (!Number.isFinite(v)) return;
-                          updateActiveProfile((p) => ({
-                            ...p,
-                            biochemical: { ...p.biochemical, [key]: v },
-                          }));
+                          const clamped = Math.max(min, Math.min(max, v));
+                          updateActiveProfile(
+                            (p) => ({
+                              ...p,
+                              biochemical: {
+                                ...p.biochemical,
+                                [key]: clamped,
+                              },
+                            }),
+                            key
+                          );
                         }}
                         className="w-24 rounded-lg border border-white/[0.08] bg-[#121212] px-2 py-1 text-right font-mono text-xs text-[#ececec]"
                       />
@@ -1419,13 +1725,16 @@ export default function PreFlightAdminPage() {
                     <select
                       value={activeProfile.pharmacogenomics.mtrrGenotype}
                       onChange={(e) =>
-                        updateActiveProfile((p) => ({
-                          ...p,
-                          pharmacogenomics: {
-                            ...p.pharmacogenomics,
-                            mtrrGenotype: e.target.value as MtrrGenotype,
-                          },
-                        }))
+                        updateActiveProfile(
+                          (p) => ({
+                            ...p,
+                            pharmacogenomics: {
+                              ...p.pharmacogenomics,
+                              mtrrGenotype: e.target.value as MtrrGenotype,
+                            },
+                          }),
+                          "mtrrGenotype"
+                        )
                       }
                       className="rounded-lg border border-white/[0.08] bg-[#121212] px-2 py-1 font-mono text-xs text-[#ececec]"
                     >
@@ -1436,18 +1745,47 @@ export default function PreFlightAdminPage() {
                   </label>
 
                   <label className="flex items-center justify-between gap-3 border-b border-white/[0.04] pb-2 text-xs text-[#9b9b9b]">
+                    <span>CYP2D6 Phenotype</span>
+                    <select
+                      value={activeProfile.pharmacogenomics.cyp2d6Phenotype}
+                      onChange={(e) =>
+                        updateActiveProfile(
+                          (p) => ({
+                            ...p,
+                            pharmacogenomics: {
+                              ...p.pharmacogenomics,
+                              cyp2d6Phenotype: e.target
+                                .value as CypMetabolizerPhenotype,
+                            },
+                          }),
+                          "cyp2d6Phenotype"
+                        )
+                      }
+                      className="rounded-lg border border-white/[0.08] bg-[#121212] px-2 py-1 font-mono text-xs text-[#ececec]"
+                    >
+                      <option value="ultra_rapid">ultra_rapid</option>
+                      <option value="normal">normal</option>
+                      <option value="intermediate">intermediate</option>
+                      <option value="poor">poor</option>
+                    </select>
+                  </label>
+
+                  <label className="flex items-center justify-between gap-3 border-b border-white/[0.04] pb-2 text-xs text-[#9b9b9b]">
                     <span>CYP2C9 Phenotype</span>
                     <select
                       value={activeProfile.pharmacogenomics.cyp2c9Phenotype}
                       onChange={(e) =>
-                        updateActiveProfile((p) => ({
-                          ...p,
-                          pharmacogenomics: {
-                            ...p.pharmacogenomics,
-                            cyp2c9Phenotype: e.target
-                              .value as CypMetabolizerPhenotype,
-                          },
-                        }))
+                        updateActiveProfile(
+                          (p) => ({
+                            ...p,
+                            pharmacogenomics: {
+                              ...p.pharmacogenomics,
+                              cyp2c9Phenotype: e.target
+                                .value as CypMetabolizerPhenotype,
+                            },
+                          }),
+                          "cyp2c9Phenotype"
+                        )
                       }
                       className="rounded-lg border border-white/[0.08] bg-[#121212] px-2 py-1 font-mono text-xs text-[#ececec]"
                     >
@@ -1467,42 +1805,89 @@ export default function PreFlightAdminPage() {
                       step={0.02}
                       value={activeProfile.pharmacogenomics.atmDnaRepairScore}
                       onChange={(e) => {
+                        if (e.target.value.trim() === "") return;
                         const v = Number(e.target.value);
                         if (!Number.isFinite(v)) return;
-                        updateActiveProfile((p) => ({
-                          ...p,
-                          pharmacogenomics: {
-                            ...p.pharmacogenomics,
-                            atmDnaRepairScore: v,
-                          },
-                        }));
+                        const clamped = Math.max(0.4, Math.min(1.5, v));
+                        updateActiveProfile(
+                          (p) => ({
+                            ...p,
+                            pharmacogenomics: {
+                              ...p.pharmacogenomics,
+                              atmDnaRepairScore: clamped,
+                            },
+                          }),
+                          "atmDnaRepairScore"
+                        );
                       }}
                       className="w-24 rounded-lg border border-white/[0.08] bg-[#121212] px-2 py-1 text-right font-mono text-xs text-[#ececec]"
                     />
                   </label>
 
-                  <label className="flex items-center justify-between gap-3 border-b border-white/[0.04] pb-2 text-xs text-[#9b9b9b]">
-                    <span>CO2 Reactivity Slope</span>
-                    <input
-                      type="number"
-                      min={0.5}
-                      max={2.2}
-                      step={0.05}
-                      value={activeProfile.endurance.co2ReactivitySlope}
-                      onChange={(e) => {
-                        const v = Number(e.target.value);
-                        if (!Number.isFinite(v)) return;
-                        updateActiveProfile((p) => ({
-                          ...p,
-                          endurance: {
-                            ...p.endurance,
-                            co2ReactivitySlope: v,
-                          },
-                        }));
-                      }}
-                      className="w-24 rounded-lg border border-white/[0.08] bg-[#121212] px-2 py-1 text-right font-mono text-xs text-[#ececec]"
-                    />
-                  </label>
+                  {(
+                    [
+                      [
+                        "co2ReactivitySlope",
+                        "CO2 Reactivity Slope (x)",
+                        0.5,
+                        2.2,
+                        0.05,
+                      ],
+                      ["baselineOnsdMm", "Baseline ONSD (mm)", 3.5, 6.2, 0.1],
+                      [
+                        "dexaBoneTScore",
+                        "DEXA Bone T-Score (SD)",
+                        -3.0,
+                        2.5,
+                        0.1,
+                      ],
+                      [
+                        "lbnpEnduranceMin",
+                        "LBNP Endurance (min)",
+                        10,
+                        60,
+                        1,
+                      ],
+                      [
+                        "radiationToleranceMsvDay",
+                        "Radiation Tolerance (mSv/d)",
+                        0.8,
+                        4.0,
+                        0.05,
+                      ],
+                    ] as const
+                  ).map(([key, label, min, max, step]) => (
+                    <label
+                      key={key}
+                      className="flex items-center justify-between gap-3 border-b border-white/[0.04] pb-2 text-xs text-[#9b9b9b]"
+                    >
+                      <span>{label}</span>
+                      <input
+                        type="number"
+                        min={min}
+                        max={max}
+                        step={step}
+                        value={activeProfile.endurance[key]}
+                        onChange={(e) => {
+                          if (e.target.value.trim() === "") return;
+                          const v = Number(e.target.value);
+                          if (!Number.isFinite(v)) return;
+                          const clamped = Math.max(min, Math.min(max, v));
+                          updateActiveProfile(
+                            (p) => ({
+                              ...p,
+                              endurance: {
+                                ...p.endurance,
+                                [key]: clamped,
+                              },
+                            }),
+                            key
+                          );
+                        }}
+                        className="w-24 rounded-lg border border-white/[0.08] bg-[#121212] px-2 py-1 text-right font-mono text-xs text-[#ececec]"
+                      />
+                    </label>
+                  ))}
                 </div>
               </>
             )}

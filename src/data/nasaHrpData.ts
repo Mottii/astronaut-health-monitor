@@ -914,6 +914,8 @@ export const EXECUTABLE_COUNTERMEASURES: Record<
         heartRateBpm: 72,
         sleepHours: 7.4,
       },
+      isPharmacological: true,
+      primaryEnzyme: "CYP2C9",
     },
   ],
   behavioral_circadian: [
@@ -944,6 +946,8 @@ export const EXECUTABLE_COUNTERMEASURES: Record<
         moodScore: 8,
         bloodGlucoseMgDl: 94,
       },
+      isPharmacological: true,
+      primaryEnzyme: "CYP2D6",
     },
   ],
 };

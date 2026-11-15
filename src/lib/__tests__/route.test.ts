@@ -122,5 +122,51 @@ describe("/api/twin-simulate REST contract", () => {
         (c: { id: string }) => c.id === "drug_acetazolamide_renal"
       )
     ).toBe(true);
+    expect(json.profile.provenance?.suppliedFields).toHaveLength(15);
+  });
+
+  it("rejects OpenAI chat completion payloads and zero-supplied-field profile objects with HTTP 400", async () => {
+    const chatPayloadRes = await POST(
+      new Request("http://localhost:3000/api/twin-simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: "Summarize profile" }],
+        }),
+      })
+    );
+    expect(chatPayloadRes.status).toBe(400);
+
+    const emptyProfileRes = await POST(
+      new Request("http://localhost:3000/api/twin-simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          profile: { name: "Unmeasured Astronaut", callsign: "ARES-0" },
+        }),
+      })
+    );
+    expect(emptyProfileRes.status).toBe(400);
+
+    const validPartialRes = await POST(
+      new Request("http://localhost:3000/api/twin-simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          profile: {
+            name: "Partial Astronaut",
+            callsign: "ARES-P",
+            biochemical: { urinaryCalciumMgDay: 285 },
+          },
+        }),
+      })
+    );
+    expect(validPartialRes.status).toBe(200);
+    const validJson = await validPartialRes.json();
+    expect(validJson.profile.provenance.suppliedFields).toEqual([
+      "urinaryCalciumMgDay",
+    ]);
+    expect(validJson.profile.provenance.defaultedFields).toHaveLength(14);
   });
 });

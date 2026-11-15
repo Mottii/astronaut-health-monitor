@@ -275,7 +275,9 @@ export default function HomePage() {
   );
   const [crewMenuOpen, setCrewMenuOpen] = useState<boolean>(false);
   const crewMenuRef = useRef<HTMLDivElement | null>(null);
-  const prevProfileIdRef = useRef<string>(crewStore.activeProfileId);
+  const prevProfileSyncRef = useRef<string>(
+    `${crewStore.activeProfileId}:${crewStore.profiles[0]?.missionAssignment ?? "iss_orbit"}`
+  );
   const astroTickRef = useRef<number>(0);
 
   const refreshIssTelemetry = useCallback(async () => {
@@ -322,7 +324,6 @@ export default function HomePage() {
     setRoutineProgress(loadRoutineProgress());
     const loaded = loadCrewProfilesState();
     setCrewStore(loaded);
-    prevProfileIdRef.current = loaded.activeProfileId;
     void refreshIssTelemetry();
   }, [refreshIssTelemetry]);
 
@@ -359,13 +360,33 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    if (prevProfileIdRef.current !== crewStore.activeProfileId) {
-      prevProfileIdRef.current = crewStore.activeProfileId;
+    const newlyActive =
+      crewStore.profiles.find((p) => p.id === crewStore.activeProfileId) ??
+      crewStore.profiles[0];
+    const syncKey = newlyActive
+      ? `${newlyActive.id}:${newlyActive.missionAssignment}`
+      : crewStore.activeProfileId;
+    if (prevProfileSyncRef.current !== syncKey) {
+      prevProfileSyncRef.current = syncKey;
+      if (newlyActive) {
+        setEnvId(newlyActive.missionAssignment);
+        if (telemetryMode === "preset") {
+          setPresetEnv(
+            MISSION_ENVIRONMENTS[newlyActive.missionAssignment].defaultTelemetry
+          );
+        }
+      }
       resetSessionInterventions();
     }
-  }, [crewStore.activeProfileId, resetSessionInterventions]);
+  }, [
+    crewStore.activeProfileId,
+    crewStore.profiles,
+    telemetryMode,
+    resetSessionInterventions,
+  ]);
 
   function handleSelectCrewProfile(profileId: string) {
+    const selected = crewStore.profiles.find((p) => p.id === profileId);
     setCrewStore((prev) => {
       const next: CrewProfilesStorageState = {
         ...prev,
@@ -375,7 +396,10 @@ export default function HomePage() {
       saveCrewProfilesState(next);
       return next;
     });
-    prevProfileIdRef.current = profileId;
+    if (selected) {
+      prevProfileSyncRef.current = `${selected.id}:${selected.missionAssignment}`;
+      handleSelectEnvironment(selected.missionAssignment);
+    }
     resetSessionInterventions();
     setCrewMenuOpen(false);
   }
@@ -1225,6 +1249,7 @@ export default function HomePage() {
               issSnapshot={issSnapshot}
               crewProfile={activeCrewProfile}
               inferenceMode={crewStore.inferenceConfig.mode}
+              inferenceConfig={crewStore.inferenceConfig}
             />
           </div>
         </div>

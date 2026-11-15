@@ -169,6 +169,7 @@ export async function POST(request: Request) {
   }
 
   const body = parsedBody as {
+    messages?: unknown;
     profile?: unknown;
     profileId?: unknown;
     envId?: unknown;
@@ -178,14 +179,29 @@ export async function POST(request: Request) {
     actionId?: unknown;
   };
 
+  if (Array.isArray(body.messages)) {
+    return jsonResponse(
+      {
+        status: "error",
+        message:
+          "OpenAI chat completion payloads (messages[]) are not supported by /api/twin-simulate. Send an ARES-TWIN simulation payload ({ profileId | profile, envId, vitals, actionId }).",
+      },
+      { status: 400 }
+    );
+  }
+
   let profile: AstronautBiologicalProfile;
   if (body.profile !== undefined) {
     const normalized = normalizeCrewProfile(body.profile);
-    if (!normalized) {
+    if (
+      !normalized ||
+      (normalized.provenance?.suppliedFields.length ?? 0) === 0
+    ) {
       return jsonResponse(
         {
           status: "error",
-          message: "Invalid biological profile object.",
+          message:
+            "Invalid biological profile object: must contain at least one valid biochemical, pharmacogenomic, or endurance field.",
         },
         { status: 400 }
       );
@@ -328,6 +344,7 @@ export async function POST(request: Request) {
         callsign: profile.callsign,
         name: profile.name,
         summaryTag: profile.summaryTag,
+        provenance: profile.provenance,
       },
       multipliers,
       evaluation,

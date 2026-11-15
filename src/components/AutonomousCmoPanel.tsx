@@ -14,6 +14,7 @@ import {
   Play,
   RotateCcw,
   Send,
+  Sparkles,
   X,
 } from "lucide-react";
 import {
@@ -22,10 +23,13 @@ import {
   MISSION_ENVIRONMENTS,
   NASA_HAZARDS,
 } from "@/data/nasaHrpData";
+import { DEFAULT_INFERENCE_CONFIG } from "@/lib/crewProfileStorage";
 import { formatFlightSurgeonPacket } from "@/lib/triageEngine";
 import {
   computeOrganSensitivityMultipliers,
+  generateTwinConsultationSummary,
   simulatePersonalizedDrugResponse,
+  type TwinConsultationResult,
 } from "@/lib/twinEngine";
 import type {
   AstronautBiologicalProfile,
@@ -43,6 +47,7 @@ import type {
   SelectedSubStructure,
   TelemetryMode,
   TriageStatus,
+  TwinInferenceConfig,
   TwinInferenceMode,
   VitalReadings,
 } from "@/types/health";
@@ -69,6 +74,7 @@ export interface AutonomousCmoPanelProps {
   issSnapshot?: IssLiveTelemetrySnapshot | null;
   crewProfile?: AstronautBiologicalProfile | null;
   inferenceMode?: TwinInferenceMode;
+  inferenceConfig?: TwinInferenceConfig;
 }
 
 const STATUS_META: Record<
@@ -483,6 +489,7 @@ export function AutonomousCmoPanel({
   issSnapshot,
   crewProfile,
   inferenceMode,
+  inferenceConfig,
 }: AutonomousCmoPanelProps) {
   const [stage, setStage] = useState<CmoWorkflowStage>("overview");
   const [activeStepIdx, setActiveStepIdx] = useState<number>(0);
@@ -492,11 +499,44 @@ export function AutonomousCmoPanel({
   >({});
   const [copied, setCopied] = useState<boolean>(false);
   const [queuedAt, setQueuedAt] = useState<string | null>(null);
+  const [consultation, setConsultation] =
+    useState<TwinConsultationResult | null>(null);
+  const [isConsulting, setIsConsulting] = useState<boolean>(false);
 
   useEffect(() => {
     setActiveStepIdx(0);
     setStage("overview");
   }, [selectedSystem]);
+
+  useEffect(() => {
+    setConsultation(null);
+  }, [crewProfile?.id, inferenceConfig?.mode, inferenceMode, envId]);
+
+  async function handleRunLiveConsultation() {
+    if (!crewProfile || isConsulting) return;
+    setIsConsulting(true);
+    try {
+      const cfg: TwinInferenceConfig = inferenceConfig ?? {
+        ...DEFAULT_INFERENCE_CONFIG,
+        mode: inferenceMode ?? DEFAULT_INFERENCE_CONFIG.mode,
+      };
+      const res = await generateTwinConsultationSummary(
+        crewProfile,
+        evaluation,
+        cfg,
+        {
+          vitals,
+          envTelemetry,
+          envId,
+          activeDrugIds: executedActions.map((a) => a.actionId),
+          executedActions,
+        }
+      );
+      setConsultation(res);
+    } finally {
+      setIsConsulting(false);
+    }
+  }
 
   const examFindings = externalExamFindings ?? internalExamFindings;
 
@@ -563,7 +603,8 @@ export function AutonomousCmoPanel({
       biometricSource,
       issSnapshot,
       crewProfile,
-      inferenceMode,
+      inferenceMode: inferenceConfig?.mode ?? inferenceMode,
+      consultation,
     }
   );
 
@@ -723,30 +764,82 @@ export function AutonomousCmoPanel({
               return (
                 <div
                   data-testid="active-crew-biotwin-banner"
-                  className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-[#151517] px-3 py-2.5 text-xs"
+                  className="space-y-2 rounded-xl border border-white/[0.06] bg-[#151517] px-3 py-2.5 text-xs"
                 >
-                  <div className="min-w-0">
-                    <p className="truncate font-medium text-white">
-                      {crewProfile.callsign} · {crewProfile.name}
-                    </p>
-                    <p className="mt-0.5 truncate text-[10.5px] text-[#71717a]">
-                      {crewProfile.summaryTag}
-                    </p>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-white">
+                        {crewProfile.callsign} · {crewProfile.name}
+                      </p>
+                      <p className="mt-0.5 truncate text-[10.5px] text-[#71717a]">
+                        {crewProfile.summaryTag}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-1 font-mono">
+                      <span
+                        className={`text-[10.5px] font-semibold tabular-nums ${
+                          sysMult >= 1.35
+                            ? "text-rose-300"
+                            : sysMult >= 1.15
+                            ? "text-amber-300"
+                            : "text-[#d4d4d8]"
+                        }`}
+                      >
+                        {sysMult.toFixed(2)}x Risk Weight
+                      </span>
+                      <SensitivityScaleAsset multiplier={sysMult} />
+                    </div>
                   </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1 font-mono">
-                    <span
-                      className={`text-[10.5px] font-semibold tabular-nums ${
-                        sysMult >= 1.35
-                          ? "text-rose-300"
-                          : sysMult >= 1.15
-                          ? "text-amber-300"
-                          : "text-[#d4d4d8]"
-                      }`}
-                    >
-                      {sysMult.toFixed(2)}x Risk Weight
+
+                  <div className="flex items-center justify-between gap-2 border-t border-white/[0.05] pt-2">
+                    <span className="font-mono text-[10px] text-[#8b909a]">
+                      Engine: {(inferenceConfig?.mode ?? inferenceMode ?? "local_mechanistic").replace(/_/g, " ")}
                     </span>
-                    <SensitivityScaleAsset multiplier={sysMult} />
+                    <button
+                      type="button"
+                      data-testid="cmo-run-consultation-btn"
+                      onClick={handleRunLiveConsultation}
+                      disabled={isConsulting}
+                      className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-white/15 bg-[#1d1d21] px-2.5 py-1 text-[10.5px] font-medium text-white transition hover:border-white/30 disabled:opacity-50"
+                    >
+                      <Sparkles className="h-3 w-3 text-emerald-400" aria-hidden="true" />
+                      <span>
+                        {isConsulting ? "Synthesizing..." : "Run BioTwin AI"}
+                      </span>
+                    </button>
                   </div>
+
+                  {consultation && (
+                    <div
+                      data-testid="cmo-consultation-card"
+                      className="space-y-1.5 rounded-lg border border-white/[0.07] bg-[#0e0e10] p-2.5 text-[11px]"
+                    >
+                      <div className="flex items-center justify-between font-mono text-[9.5px] text-[#a1a1aa]">
+                        <span>{consultation.engineUsed}</span>
+                        <span className="uppercase">{consultation.source}</span>
+                      </div>
+                      {consultation.source === "fallback" &&
+                        consultation.fallbackReason && (
+                          <div className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10.5px] text-amber-200">
+                            {consultation.fallbackReason}
+                          </div>
+                        )}
+                      {consultation.guardrailConflict && (
+                        <div className="space-y-1 rounded border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[10.5px] text-rose-200">
+                          <div>
+                            <strong>Guardrail Conflict:</strong>{" "}
+                            {consultation.conflictReason}
+                          </div>
+                          <div className="font-mono text-[10px] text-rose-100/90">
+                            {consultation.deterministicGuardrail}
+                          </div>
+                        </div>
+                      )}
+                      <pre className="whitespace-pre-wrap font-sans text-[11px] leading-snug text-[#e4e4e7]">
+                        {consultation.summaryText}
+                      </pre>
+                    </div>
+                  )}
                 </div>
               );
             })()}

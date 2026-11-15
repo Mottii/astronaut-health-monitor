@@ -320,11 +320,27 @@ export interface PhysiologicalEnduranceEnvelope {
   radiationToleranceMsvDay: number;  // 1.0 to 3.0 mSv/day acute hematopoietic threshold
 }
 
+export interface ConvertedFieldRecord {
+  field: string;
+  rawValue: number;
+  rawUnit: string;
+  convertedValue: number;
+  targetUnit: string;
+}
+
+export interface RejectedFieldRecord {
+  field: string;
+  rawValue: string | number;
+  reason: string;
+}
+
 export interface ProfileProvenance {
   sourceType: "builtin" | "json_upload" | "text_upload" | "manual_override";
   fileName?: string;
   suppliedFields: string[];
   defaultedFields: string[];
+  convertedFields?: ConvertedFieldRecord[];
+  rejectedFields?: RejectedFieldRecord[];
 }
 
 export interface AstronautBiologicalProfile {
@@ -377,6 +393,7 @@ export interface TwinInferenceConfig {
   localModelName: string;
   openApiEndpointUrl: string;
   openApiKey: string;
+  openApiModelName?: string;
 }
 
 export interface FlightSurgeonPacketContext {
@@ -388,4 +405,11 @@ export interface FlightSurgeonPacketContext {
   issSnapshot?: IssLiveTelemetrySnapshot | null;
   crewProfile?: AstronautBiologicalProfile | null;
   inferenceMode?: TwinInferenceMode;
+  consultation?: {
+    engineUsed: string;
+    source: "deterministic" | "llm" | "fallback";
+    summaryText: string;
+    guardrailConflict?: boolean;
+    conflictReason?: string;
+  } | null;
 }
