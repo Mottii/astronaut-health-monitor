@@ -1,10 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { sampleLogoMorph } from "@/lib/logoMorphMotion";
+import { logoAssemblyAtHeight, sampleLogoMorph } from "@/lib/logoMorphMotion";
 import { buildBrandMarkGeometry } from "@/lib/aresLogoGeometry";
 import { createCosmicLogoTransition } from "@/lib/cosmicLogoTransition";
 import * as THREE from "three";
 
 describe("cosmic logo to BioTwin transition", () => {
+  it("keeps the same logo spin during descent and rest despite the body loading and turning", () => {
+    const transition = createCosmicLogoTransition(120,1);
+    const camera = new THREE.PerspectiveCamera();
+    const emblem = transition.group.children.find((child) => child instanceof THREE.Group) as THREE.Group;
+    const particles = transition.group.children.find((child) => child instanceof THREE.Points) as THREE.Points<THREE.BufferGeometry,THREE.ShaderMaterial>;
+    let previousAngle = -0.2;
+    let previousTime = 0;
+    for (const time of [0.5,1,2,2.9,3.1,4,6]) {
+      const bodyRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),time<2?0:0.5);
+      transition.update(0,time,camera,bodyRotation,false,time);
+      expect((emblem.rotation.y-previousAngle)/(time-previousTime)).toBeCloseTo(0.38,10);
+      expect(transition.group.quaternion.angleTo(new THREE.Quaternion())).toBe(0);
+      expect(particles.material.uniforms.uBodyMatrix.value.elements).toEqual(new THREE.Matrix4().makeRotationFromQuaternion(bodyRotation).elements);
+      previousAngle = emblem.rotation.y;
+      previousTime = time;
+    }
+    transition.group.traverse((child) => {
+      if (child instanceof THREE.Mesh || child instanceof THREE.Points || child instanceof THREE.LineSegments) {
+        child.geometry.dispose();
+        const materials = Array.isArray(child.material)?child.material:[child.material];
+        materials.forEach((material) => material.dispose());
+      }
+    });
+  });
+  it("assembles the apex before the middle and lower legs", () => {
+    expect(logoAssemblyAtHeight(1,0.3)).toBe(1);
+    expect(logoAssemblyAtHeight(0,0.3)).toBe(0);
+    expect(logoAssemblyAtHeight(-1,0.3)).toBe(0);
+    expect(logoAssemblyAtHeight(0,0.65)).toBe(1);
+    expect(logoAssemblyAtHeight(-1,0.65)).toBe(0);
+    for (const y of [-1,0,1]) expect(logoAssemblyAtHeight(y,1)).toBe(1);
+  });
   it("emerges from mist before introducing the human model", () => {
     const first = sampleLogoMorph(0, 0);
     const settled = sampleLogoMorph(0, 4);

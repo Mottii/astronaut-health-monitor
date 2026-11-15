@@ -3,10 +3,26 @@ import * as THREE from "three";
 import {
   buildShellEnvelope,
   containGeometryInsideShell,
+  containGeometryInsideShellAsync,
   containGroupInsideShell,
 } from "@/lib/shellContainment";
 
 describe("shellContainment", () => {
+  it("prepares geometry in time slices without changing the resulting shape", async () => {
+    const shell = new THREE.SphereGeometry(1,32,24);
+    const envelope = buildShellEnvelope(shell)!;
+    const original = new THREE.SphereGeometry(1.06,48,32);
+    const sliced = original.clone();
+    const expected = containGeometryInsideShell(original,envelope,0.05);
+    const actual = await containGeometryInsideShellAsync(sliced,envelope,0.05);
+    expect(actual).toEqual(expected);
+    expect(sliced.getAttribute("position").array).toEqual(original.getAttribute("position").array);
+    const cancelled = new THREE.SphereGeometry(1.06,16,12);
+    const before = Array.from(cancelled.getAttribute("position").array);
+    await containGeometryInsideShellAsync(cancelled,envelope,0.05,undefined,() => true);
+    expect(Array.from(cancelled.getAttribute("position").array)).toEqual(before);
+    shell.dispose(); original.dispose(); sliced.dispose(); cancelled.dispose();
+  });
   it("clamps vertices protruding outside a spherical shell inward with margin", () => {
     const shellGeo = new THREE.SphereGeometry(1.0, 32, 24);
     const envelope = buildShellEnvelope(shellGeo);

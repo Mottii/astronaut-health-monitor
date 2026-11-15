@@ -60,9 +60,22 @@ export function PresentationStory({
   const currentIndexRef = useRef(slideIndex);
   const onSelectRef = useRef(onSelectSlide);
   onSelectRef.current = onSelectSlide;
-  const [soundOn, setSoundOn] = useState(() => soundEngine.isEnabled());
+  const [soundEnabled, setSoundEnabled] = useState(() => soundEngine.isEnabled());
+  const [soundPlaying, setSoundPlaying] = useState(() => soundEngine.isPlaying());
   // Background music starts on entry; if the browser blocks it, the engine resumes on the first gesture.
-  useEffect(() => { setSoundOn(soundEngine.initAutoplay()); }, []);
+  useEffect(() => {
+    const updateSound = () => {
+      setSoundEnabled(soundEngine.isEnabled());
+      setSoundPlaying(soundEngine.isPlaying());
+    };
+    const unsubscribe = soundEngine.subscribe(updateSound);
+    soundEngine.enterPresentation();
+    updateSound();
+    return () => {
+      unsubscribe();
+      soundEngine.leavePresentation();
+    };
+  }, []);
   // Full motion is the requested presentation; a quiet, persistent opt-out remains available.
   const [reducedMotion, setReducedMotion] = useState(false);
   const reducedMotionRef = useRef(reducedMotion);
@@ -222,6 +235,7 @@ export function PresentationStory({
   useEffect(() => () => { consoleTransitionRef.current?.cancel(); }, []);
   const openConsole = useCallback(() => {
     if (consoleTransitionRef.current) return;
+    soundEngine.leavePresentation();
     setLeaving(true);
     consoleTransitionRef.current = startConsoleTransition(
       () => consoleCallbackRef.current(),
@@ -253,9 +267,9 @@ export function PresentationStory({
         </a>
         <span className="ares-story-edition">HUMAN HEALTH / BEYOND EARTH</span>
         <div className="ares-story-header-actions">
-          <button type="button" className="ares-story-sound" title={soundOn ? "Mute ambient audio" : "Enable ambient audio"}
-            aria-label={soundOn ? "Mute sound" : "Enable sound"} aria-pressed={soundOn} onClick={() => setSoundOn(soundEngine.toggle())}>
-            <span className="ares-story-audio-mark" data-playing={soundOn} aria-hidden="true"><i /><i /><i /><i /></span>
+          <button type="button" className="ares-story-sound" data-sound-toggle title={soundPlaying ? "Mute music" : "Start music"}
+            aria-label={soundPlaying ? "Mute music" : "Start music"} aria-pressed={soundEnabled} onClick={() => { soundEngine.toggle(); }}>
+            <span className="ares-story-audio-mark" data-enabled={soundEnabled} data-playing={soundPlaying} aria-hidden="true"><i /><i /><i /><i /></span>
           </button>
           <button type="button" onClick={openConsole} className="ares-story-console" disabled={leaving} aria-busy={leaving} aria-label="Open CMO console">CMO CONSOLE <ArrowUpRight size={14} aria-hidden="true" /></button>
         </div>

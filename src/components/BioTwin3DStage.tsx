@@ -19,8 +19,8 @@ import { sampleLogoMorph } from "@/lib/logoMorphMotion";
 import { createConstellationField } from "@/lib/constellationField";
 import {
   buildShellEnvelope,
-  containGeometryInsideShell,
-  containGroupInsideShell,
+  containGeometryInsideShellAsync,
+  containGroupInsideShellAsync,
   type ShellEnvelope,
 } from "@/lib/shellContainment";
 import type {
@@ -778,7 +778,8 @@ export function BioTwin3DStage({
 
     const width = Math.max(container.clientWidth, 320);
     const height = Math.max(container.clientHeight, 360);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    const renderPixelRatio = Math.min(window.devicePixelRatio || 1, cinematic ? 1.5 : 2);
+    renderer.setPixelRatio(renderPixelRatio);
     renderer.setSize(width, height, false);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -814,7 +815,7 @@ export function BioTwin3DStage({
     frameStory(width, height);
 
     const composer = new EffectComposer(renderer);
-    composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    composer.setPixelRatio(renderPixelRatio);
     composer.setSize(width, height);
     const renderPass = new RenderPass(scene, camera);
     const bloomPass = new UnrealBloomPass(
@@ -1388,10 +1389,13 @@ export function BioTwin3DStage({
       return group;
     };
 
+    let finishBodyPreparation = () => {};
+    const bodyPreparationReady = new Promise<void>((resolve) => { finishBodyPreparation = resolve; });
     const loader = new GLTFLoader();
     loader.load(
       "/models/ares-biotwin.glb",
-      (gltf) => {
+      async (gltf) => {
+        try {
         if (disposed) return;
         const root = gltf.scene;
         root.updateMatrixWorld(true);
@@ -1417,13 +1421,14 @@ export function BioTwin3DStage({
           if (shellObj.geometry.boundingBox) bodyBounds.copy(shellObj.geometry.boundingBox);
           if (shellEnvelope && pendingArmBoneGroups.length > 0) {
             for (const grp of pendingArmBoneGroups) {
-              containGroupInsideShell(grp, shellEnvelope, 0.008);
+              await containGroupInsideShellAsync(grp, shellEnvelope, 0.008, () => disposed);
             }
             pendingArmBoneGroups.length = 0;
           }
         }
 
         for (const obj of meshesToProcess) {
+          if (disposed) return;
           if (obj !== shellObj) {
             // Bake glTF hierarchy transform into geometry so world positions match ORGAN_ANCHORS
             obj.geometry.applyMatrix4(obj.matrixWorld);
@@ -1481,7 +1486,8 @@ export function BioTwin3DStage({
               stripProceduralArmTubes(obj.geometry);
             }
             if (shellEnvelope) {
-              containGeometryInsideShell(obj.geometry, shellEnvelope, 0.011);
+              await containGeometryInsideShellAsync(obj.geometry, shellEnvelope, 0.011, undefined, () => disposed);
+              if (disposed) return;
             }
             anatomyRoot.add(obj);
             continue;
@@ -1494,7 +1500,8 @@ export function BioTwin3DStage({
           if (parsed.tissueTag === "Bone") {
             // Unify pelvis, femurs, and knees with Skeletal_Frame X-ray Fresnel shader
             if (shellEnvelope) {
-              containGeometryInsideShell(obj.geometry, shellEnvelope, 0.011);
+              await containGeometryInsideShellAsync(obj.geometry, shellEnvelope, 0.011, undefined, () => disposed);
+              if (disposed) return;
             }
             obj.material = skeletonMaterial;
             obj.userData = { systemId: sysId, parsed };
@@ -1506,7 +1513,8 @@ export function BioTwin3DStage({
 
           // Ensure soft organs and vasculature sit safely inside Outer_Body_Shell even during breathing/cardiac pulse
           if (shellEnvelope) {
-            containGeometryInsideShell(obj.geometry, shellEnvelope, 0.010);
+            await containGeometryInsideShellAsync(obj.geometry, shellEnvelope, 0.010, undefined, () => disposed);
+            if (disposed) return;
           }
 
           const isShell = parsed.layer === "Shell";
@@ -1578,11 +1586,18 @@ export function BioTwin3DStage({
           organPickTargets.push(obj);
         }
 
+        if (disposed) return;
         modelLoaded = true;
         setLoadState("ready");
+        } catch {
+          if (!disposed) setLoadState("error");
+        } finally {
+          finishBodyPreparation();
+        }
       },
       undefined,
       () => {
+        finishBodyPreparation();
         if (!disposed) setLoadState("error");
       }
     );
@@ -1590,8 +1605,9 @@ export function BioTwin3DStage({
     // Replace procedural arm tubes with real anatomical humerus, radius & ulna bones aligned to body pose
     loader.load(
       "/models/skeleton.glb",
-      (gltf) => {
-        if (disposed) return;
+      async (gltf) => {
+        await bodyPreparationReady;
+        if (disposed || !modelLoaded) return;
         const root = gltf.scene;
         root.updateMatrixWorld(true);
 
@@ -1647,6 +1663,7 @@ export function BioTwin3DStage({
 
         let addedCount = 0;
         for (const spec of armSpecs) {
+          if (disposed) return;
           const meshes = spec.names
             .map((n) => byName.get(n))
             .filter((m): m is THREE.Mesh => Boolean(m));
@@ -1659,7 +1676,8 @@ export function BioTwin3DStage({
           );
           if (seg) {
             if (shellEnvelope) {
-              containGroupInsideShell(seg, shellEnvelope, 0.008);
+              await containGroupInsideShellAsync(seg, shellEnvelope, 0.008, () => disposed);
+              if (disposed) return;
             } else {
               pendingArmBoneGroups.push(seg);
             }
@@ -1832,6 +1850,7 @@ export function BioTwin3DStage({
 
     // Smooth animation loop
     const clock = new THREE.Clock();
+    let introTime = 0;
     const projectedVec = new THREE.Vector3();
     const targetColor = new THREE.Color();
     const statusColorObj = new THREE.Color();
@@ -1845,6 +1864,7 @@ export function BioTwin3DStage({
       }
 
       const dt = Math.min(clock.getDelta(), 0.05);
+      introTime += Math.min(dt, 1/30);
       const t = reducedMotionRef.current ? 0 : clock.elapsedTime;
       const snapshot = liveRef.current;
       const story = storyProgressRef.current;
@@ -2252,7 +2272,7 @@ export function BioTwin3DStage({
       }
 
       if (story && cosmicLogo) {
-        cosmicLogo.update(story.current, clock.elapsedTime, camera, anatomyRoot.quaternion, reducedMotionRef.current);
+        cosmicLogo.update(story.current, clock.elapsedTime, camera, anatomyRoot.quaternion, reducedMotionRef.current, introTime);
       }
       if (story && chapterAtmosphere) {
         chapterAtmosphere.update(story.current, t, camera, storyTarget, reducedMotionRef.current);
@@ -2310,6 +2330,7 @@ export function BioTwin3DStage({
 
     return () => {
       disposed = true;
+      finishBodyPreparation();
       cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
       controls.removeEventListener("start", cancelFlyOnUserDrag);

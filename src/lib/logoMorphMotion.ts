@@ -5,6 +5,12 @@ function smooth(from: number, to: number, value: number): number {
   return t * t * (3 - 2 * t);
 }
 
+/** Assemble the apex first, then sweep down the legs; particle arrival precedes the shell. */
+export function logoAssemblyAtHeight(height: number, intro: number): number {
+  const topToBottom = Math.max(0,Math.min(1,(1-height)*0.5));
+  return smooth(topToBottom*0.72,topToBottom*0.72+0.28,intro);
+}
+
 /** One reversible timeline for the intro, the actual mesh, and the particle handoff. */
 export function sampleLogoMorph(progress: number, elapsed: number, reducedMotion = false) {
   const wrapped = wrapStoryProgress(progress);
